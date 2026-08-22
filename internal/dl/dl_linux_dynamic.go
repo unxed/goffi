@@ -1,6 +1,7 @@
-//go:build linux && !android && !goffi_static
+//go:build linux && !android && !goffi_static && !goffi_musl
 
-// Dynamic symbol imports for Linux.
+// Dynamic symbol imports for Linux/glibc. The musl flavor lives in
+// dl_musl_amd64.go / dl_musl_arm64.go behind the goffi_musl build tag.
 //
 // These directives live in their own file so that the goffi_static build tag
 // can drop them (and with them the ELF interpreter and DT_NEEDED entries the

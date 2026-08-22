@@ -410,6 +410,11 @@ The tag is a no-op on Windows and Android, which are dynamically linked by
 construction; `Available()` stays `true` there, so a cross-platform build matrix
 can pass the tag everywhere. See [docs/STATIC_BUILDS.md](docs/STATIC_BUILDS.md).
 
+For Alpine and other musl-based distros there is a third flavor: the default
+build hardcodes glibc SONAMEs and the glibc loader path, so it cannot start
+under musl at all. Build with `-tags goffi_musl` (plus one `-gcflags` line) to
+target musl with **full FFI** — see [docs/MUSL.md](docs/MUSL.md).
+
 ---
 
 ## Platform Support
