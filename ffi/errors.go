@@ -2,6 +2,8 @@ package ffi
 
 import (
 	"fmt"
+
+	"github.com/go-webgpu/goffi/internal/static"
 )
 
 // InvalidCallInterfaceError indicates CallInterface preparation failed due to
@@ -151,6 +153,14 @@ func (e *TypeValidationError) Is(target error) bool {
 	_, ok := target.(*TypeValidationError)
 	return ok
 }
+
+// ErrStaticBuild is returned, usually wrapped in a *LibraryError, by every
+// operation that needs the dynamic loader when goffi was built with
+// -tags goffi_static: LoadLibrary, GetSymbol and CallFunction.
+//
+// Detect the mode up front with Available, or at the call site with
+// errors.Is(err, ffi.ErrStaticBuild).
+var ErrStaticBuild = static.ErrDisabled
 
 // Deprecated: Legacy sentinel errors kept for backwards compatibility.
 // Use typed errors above with errors.As() for better error handling.

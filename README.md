@@ -376,6 +376,42 @@ if err != nil {
 
 ---
 
+## Static Builds
+
+Binaries that import goffi are dynamically linked by default: the
+`//go:cgo_import_dynamic` directives behind `dlopen`/`dlsym` make the Go linker
+emit an ELF interpreter and `DT_NEEDED` entries even under `CGO_ENABLED=0`, and
+`-extldflags '-static'` cannot change that because no external linker runs.
+
+Build with `-tags goffi_static` to drop those directives:
+
+```bash
+CGO_ENABLED=0 go build -tags goffi_static ./...
+```
+
+The result is a genuinely static binary that runs on Alpine and in `scratch`
+containers. The trade is unavoidable — `dlopen` is a service of the dynamic
+loader, which a static executable does not have — so in that mode `LoadLibrary`,
+`GetSymbol` and `CallFunction` return an error wrapping `ffi.ErrStaticBuild`.
+
+The API is identical in both modes, so one source tree can produce both
+artifacts. Branch on `ffi.Available()`, a compile-time constant, to keep the
+pure-Go path and let the linker drop the rest:
+
+```go
+if ffi.Available() {
+    backend = newAcceleratedBackend()
+} else {
+    backend = newPureGoBackend()
+}
+```
+
+The tag is a no-op on Windows and Android, which are dynamically linked by
+construction; `Available()` stays `true` there, so a cross-platform build matrix
+can pass the tag everywhere. See [docs/STATIC_BUILDS.md](docs/STATIC_BUILDS.md).
+
+---
+
 ## Platform Support
 
 | Platform | Arch | ABI | Since | CI |

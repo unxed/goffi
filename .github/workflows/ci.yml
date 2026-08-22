@@ -168,6 +168,29 @@ jobs:
   # Keep both supported Go patch lines: runtime/cgo startup and TLS details
   # are part of this platform contract, so a single floating toolchain is not
   # sufficient evidence.
+  # Static builds - the goffi_static tag must strip every
+  # //go:cgo_import_dynamic directive, otherwise the linker keeps emitting an
+  # ELF interpreter and the artifact will not run on Alpine or scratch.
+  # See docs/STATIC_BUILDS.md and unxed/f4#693.
+  static-build:
+    name: Static Build (goffi_static)
+    runs-on: ubuntu-latest
+    needs: [lint, formatting]
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Check static build mode
+        run: scripts/check-static.sh
+
   android-cross:
     name: Android arm64 (Go ${{ matrix.go }})
     runs-on: ubuntu-latest
