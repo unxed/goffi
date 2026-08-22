@@ -104,7 +104,7 @@ func writeProbeModule(t *testing.T) string {
 	dir := t.TempDir()
 	files := map[string]string{
 		"main.go": probeSource,
-		"go.mod": "module goffiprobe\n\ngo 1.25\n\n" +
+		"go.mod": "module goffiprobe\n\ngo 1.26.0\n\n" +
 			"require github.com/go-webgpu/goffi v0.0.0\n\n" +
 			"replace github.com/go-webgpu/goffi => " + root + "\n",
 	}
