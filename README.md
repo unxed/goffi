@@ -505,6 +505,18 @@ goffi powers an ecosystem of pure Go GPU libraries:
 
 ---
 
+
+
+## Star History
+
+<a href="https://starhistory.io">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.starhistory.io/png?repos=go-webgpu/goffi&style=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.starhistory.io/png?repos=go-webgpu/goffi&style=professional" />
+   <img alt="Star History Chart" src="https://api.starhistory.io/png?repos=go-webgpu/goffi" width="800" />
+ </picture>
+</a>
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
