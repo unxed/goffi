@@ -61,6 +61,12 @@ var setg_func uintptr
 
 //go:nosplit
 func x_cgo_init(g *G, setg uintptr) {
+	// Portable universal build: before touching any libc symbol (malloc
+	// below is the first), re-exec through the host loader with libc
+	// pre-loaded. No-op in the default and goffi_musl builds. See
+	// reexec_universal_linux.go.
+	maybeReexecUniversal()
+
 	var size size_t
 	var attr *pthread_attr_t
 
