@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Andrey Kolkov and GoGPU Contributors
 
-//go:build linux && !android && !goffi_static && goffi_musl && arm64
+//go:build linux && !android && !goffi_static && goffi_musl && !goffi_universal && arm64
 
 // Dynamic symbol imports for Linux/musl (Alpine and friends).
 //
