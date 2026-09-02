@@ -6,9 +6,10 @@
 > what is already done, the one blocker currently in the way (with its designed
 > fix), and the precise next steps with commands.
 >
-> **Status: work in progress. The universal runtime path does not work yet.**
-> Everything compiles; the blocker is diagnosed and the fix is designed but not
-> yet landed. See "START HERE" for the immediate next action.
+> **Status: the plan below is complete.** The universal path works end to end on
+> both glibc and musl (§5.1/§5.1b), the loader package, audit tool, tests, CI and
+> docs (§5.2-§5.7) have landed. Section 3 is kept as the historical record of the
+> blocker that was fixed. See "START HERE" for what is left.
 
 ---
 
@@ -127,7 +128,7 @@ pointer-ified in place; scratch memory comes from raw `mmap`.
 
 ---
 
-## 3. THE CURRENT BLOCKER and its designed fix (do this first)
+## 3. The startup blocker and its fix (RESOLVED - historical record)
 
 ### Symptom
 A universal binary (empty-SONAME + stripped interp + re-exec at top of
@@ -151,7 +152,7 @@ the host `ld.so` sets up `%fs` before the Go entry point runs.
 Verified with `go tool objdump` on the built binary: the fault is exactly the
 `MOVQ FS:-8, R14` after the first ABI0 call.
 
-### The fix (designed, not yet implemented)
+### The fix (implemented; landed in `setup_universal_tls_*.s`)
 Add a tiny per-arch **assembly** shim `setupUniversalTLS()` and call it as the
 **very first statement** of `x_cgo_init` in the universal build, *before*
 `maybeReexecUniversal()`. Because it is the first `CALL` in `x_cgo_init` and it
@@ -279,7 +280,7 @@ is enabled (`Available()==true`) automatically — no change needed there.
    autonomous re-exec).** The universal probe's FP check was switched from
    `sqrt` (libm on glibc) to `atof` (libc on both).
 
-2. **`internal/loader` package** — the auditable "loader" port. A per-arch table
+2. **[DONE] `internal/loader` package** — the auditable "loader" port. A per-arch table
    (glibc/musl × amd64/arm64) of loader path + libc SONAME, plus runtime
    probing: detect the host libc flavor (filesystem existence of the loader
    paths; optionally read `PT_INTERP` from `/proc/self/exe` and/or auxv
@@ -290,12 +291,12 @@ is enabled (`Available()==true`) automatically — no change needed there.
      re-exec path is nosplit/libc-free and cannot import general code, so a small
      duplicated table there is acceptable; add a test asserting they match).
 
-3. **`cmd/goffi-audit`** — Profile-U contract checker: open a binary with
+3. **[DONE] `cmd/goffi-audit`** — Profile-U contract checker: open a binary with
    `debug/elf` and assert it has **no `PT_INTERP`** and **no `DT_NEEDED`**. Exit
    non-zero otherwise. This is the portable essence of static-everywhere's
    onebin `c_profile.c`.
 
-4. **purego coexistence (CGO_ENABLED=0)** — goffi already has a `nofakecgo`
+4. **[DONE] purego coexistence (CGO_ENABLED=0)** — goffi already has a `nofakecgo`
    build tag (`ffi/fakecgo_unix.go` is `//go:build ... && !nofakecgo ...`) that
    drops goffi's fakecgo so purego's provides the cgo-runtime symbols. Verified:
    `-tags nofakecgo` makes goffi+purego build **and** run under CGO_ENABLED=0.
@@ -304,7 +305,7 @@ is enabled (`Available()==true`) automatically — no change needed there.
    build owns the cgo runtime and must not be combined with purego's fakecgo
    (using `nofakecgo` there would disable the re-exec bridge).
 
-5. **Tests:**
+5. **[DONE] Tests:**
    - `internal/loader` unit tests (table correctness; flavor detection).
    - `ffi/universal_link_test.go`: build a `-tags goffi_universal` binary and
      assert **no `DT_NEEDED`** via `debug/elf` (interp-strip is a separate build
@@ -312,7 +313,8 @@ is enabled (`Available()==true`) automatically — no change needed there.
    - Confirm the existing `ffi/musl_directives_test.go` (`TestMuslDirectiveParity`)
      still passes; extend only if it needs to know about the universal files.
 
-6. **CI (`.github/workflows/ci.yml`)** — mirror the existing musl pattern
+6. **[DONE] CI** — landed as a separate `.github/workflows/universal.yml`
+   rather than inside `ci.yml`, mirroring the existing musl pattern
    (`scripts/check-musl.sh` + `cmd/musl-probe`). Add:
    - a `universal-build` job that builds the probe, strips the interp, and
      asserts the ELF contract (no PT_INTERP, no DT_NEEDED);
@@ -323,8 +325,17 @@ is enabled (`Available()==true`) automatically — no change needed there.
    Existing CI pins a specific Go toolchain; the universal build needs **no**
    `-gcflags` (empty-SONAME `cgo_import_dynamic` is allowed in non-cgo code; only
    `//go:cgo_dynamic_linker`, which universal does not use, was restricted).
+   Landed with all four jobs. Two notes for anyone editing that workflow:
+   - it pins `go-version: '1.26.x'` like `ci.yml`, because the `goffi_musl`
+     build's `-gcflags=...=-std` workaround is calibrated against that toolchain;
+   - it runs `go vet -unsafeptr=false`. A bare `go vet ./...` fails on
+     `ffi/callback_pointer.go` (the deliberate `//go:nocheckptr` helper that
+     rebuilds a pointer from a native callback register). `ci.yml` never saw
+     this because it runs vet through golangci-lint, whose `.golangci.yml`
+     excludes `govet` on exactly those paths; the flag is the bare-vet
+     equivalent of that exclusion. Do not "fix" it by rewriting the helper.
 
-7. **Docs + attribution:**
+7. **[DONE] Docs + attribution:**
    - Update `docs/MUSL.md` (mention the universal build as the single-binary
      alternative).
    - New `docs/PROFILE_U.md` (user-facing): how to build a universal binary, the
@@ -332,6 +343,13 @@ is enabled (`Available()==true`) automatically — no change needed there.
      loader we do not recognise cannot do FFI; argv[0] becomes the resolved exe
      path after re-exec).
    - Attribute `unxed/static-everywhere` and `pg83/solo` in `NOTICE`/`README`.
+   `docs/PROFILE_U.md` also records the purego/pureffi situation: `-tags
+   nofakecgo` cannot be used in universal mode (it removes the re-exec bridge
+   along with fakecgo), so a purego-API dependency should go through
+   `unxed/pureffi`, which carries no fakecgo of its own. pureffi needs **no**
+   adaptation for this branch: Profile U only adds build-tag-gated files plus
+   the new `ffi.HostLoader`/`HostLibC`/`LibcKind` helpers, and pureffi touches
+   neither.
 
 ---
 
@@ -408,10 +426,17 @@ previous commit).
 
 ## START HERE (immediate next action)
 
-The core mechanism is done: the universal build is green on both glibc and
-musl end-to-end (§5 items 1 and 1b). Continue with §5.2 onward — the
-`internal/loader` package and public API first, then `cmd/goffi-audit`, the
-purego-coexistence job, tests, both-libc CI, and the user-facing docs.
+Everything in §5 has landed. What remains is verification and release hygiene:
+
+1. **Watch the `universal` workflow go green.** Until the vet fix above, the
+   build job died before `go test`, so the unit-test and both-libc run jobs on
+   this branch are still **unverified in CI**. Read that run before trusting
+   the tests.
+2. **arm64 is still cross-compile-verified only.** Run `cmd/universal-probe` on
+   a real aarch64 glibc host and an aarch64 Alpine host, then drop the caveat
+   from `docs/PROFILE_U.md` and this file.
+3. **Release notes.** `CHANGELOG.md` / `ROADMAP.md` have no Profile U entry yet;
+   add one when the branch is proposed upstream.
 
 Quick check that the mechanism still works after any change:
 `scripts/build-universal.sh -o /tmp/uprobe ./cmd/universal-probe`, then run

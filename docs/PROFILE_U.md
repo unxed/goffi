@@ -47,6 +47,17 @@ ffi.LibcKind()   // "glibc" | "musl" | "unknown"
 - The universal build **owns the cgo runtime**; do not combine it with purego's
   fakecgo. To run goffi alongside purego, use the default build with
   `-tags nofakecgo` (see `docs/MUSL.md` and the CI `purego-coexistence` job).
+  `-tags nofakecgo` is *not* an option in universal mode: dropping goffi's
+  fakecgo also drops the re-exec bridge, which lives at the top of its
+  `x_cgo_init`.
+
+  If a dependency needs the purego *API*, prefer
+  [`unxed/pureffi`](https://github.com/unxed/pureffi) (a drop-in replacement
+  installed through a `replace` directive, already listed in the README): it
+  implements that API entirely on top of goffi and carries **no fakecgo of its
+  own**, so it needs no build tags and works unchanged in universal mode. No
+  pureffi change is required for Profile U — this branch only *adds* public API
+  (`HostLoader`/`HostLibC`/`LibcKind`) and build-tag-gated files.
 
 ## Attribution
 
