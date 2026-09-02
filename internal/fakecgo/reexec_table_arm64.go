@@ -9,14 +9,14 @@ package fakecgo
 // open/access/readlink syscalls, so the bridge uses the *at forms everywhere
 // (with AT_FDCWD); these numbers match the generic syscall table.
 const (
-	sysRead       = 63
-	sysWrite      = 64
-	sysClose      = 57
-	sysMmap       = 222
-	sysExecve     = 221
-	sysReadlinkat = 78
-	sysOpenat     = 56
-	sysFaccessat  = 48
+	sysRead        = 63
+	sysWrite       = 64
+	sysClose       = 57
+	sysMmap        = 222
+	sysExecve      = 221
+	sysReadlinkat  = 78
+	sysOpenat      = 56
+	sysFaccessat   = 48
 	sysMemfdCreate = 279
 )
 

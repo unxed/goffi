@@ -9,14 +9,14 @@ package fakecgo
 // are used so the same Go logic compiles unchanged on arm64 (see the arm64
 // table), where the legacy open/access/readlink numbers do not exist.
 const (
-	sysRead       = 0
-	sysWrite      = 1
-	sysClose      = 3
-	sysMmap       = 9
-	sysExecve     = 59
-	sysReadlinkat = 267
-	sysOpenat     = 257
-	sysFaccessat  = 269
+	sysRead        = 0
+	sysWrite       = 1
+	sysClose       = 3
+	sysMmap        = 9
+	sysExecve      = 59
+	sysReadlinkat  = 267
+	sysOpenat      = 257
+	sysFaccessat   = 269
 	sysMemfdCreate = 319
 )
 
