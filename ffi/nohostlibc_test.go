@@ -44,9 +44,12 @@ func TestNoHostLibcIsReportedNotFatal(t *testing.T) {
 	// executeFunction is the guard CallFunction goes through. A caller cannot
 	// legitimately hold a foreign function pointer in this mode -- the two
 	// calls above are the only ways to get one, and both fail -- so this is
-	// belt and braces, checked with a pointer that must never be dereferenced.
+	// belt and braces. It passes the address of a real object rather than a
+	// fabricated address: the guard returns before fn is read, and a uintptr
+	// conversion here would be a genuine unsafe.Pointer misuse.
 	var cif types.CallInterface
-	if _, err := executeFunction(&cif, unsafe.Pointer(uintptr(1)), nil, nil); !errors.Is(err, ErrNoHostLibc) {
+	var neverCalled byte
+	if _, err := executeFunction(&cif, unsafe.Pointer(&neverCalled), nil, nil); !errors.Is(err, ErrNoHostLibc) {
 		t.Errorf("executeFunction error = %v, want ErrNoHostLibc", err)
 	}
 }
