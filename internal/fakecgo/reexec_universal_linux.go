@@ -41,22 +41,22 @@
 
 package fakecgo
 
-// KNOWN ISSUE (work in progress): this bridge does not run yet on the very
-// first (kernel-direct) launch. When _cgo_init is present, rt0_go SKIPS the
-// runtime's own TLS setup and delegates it to _cgo_init (see runtime/asm_amd64.s:
-// the "JZ needtls" is only taken when _cgo_init is nil). So at x_cgo_init time,
-// on a no-interpreter binary the kernel loaded directly, the %fs/TLS base is
-// not initialised. The Go compiler emits `MOVQ FS:-8, R14` (reload the g
-// register) after every call to an ABI0 assembly function, and that TLS read
-// faults before we reach execve.
+// TLS: on the very first (kernel-direct) launch of a universal binary there is
+// no host loader, so the thread pointer is unset (rt0_go delegates TLS setup to
+// _cgo_init). setupUniversalTLS, called before this function in x_cgo_init,
+// installs a scratch thread pointer so the compiler's g-reloads don't fault;
+// see setup_universal_tls_*.s. On the re-executed launch the host loader sets
+// up real TLS.
 //
-// Fix in progress: a tiny per-arch asm shim (setupUniversalTLS) called as the
-// first thing in x_cgo_init on the universal build, which, only when no TLS is
-// set up yet (first launch), points %fs (amd64) / TPIDR_EL0 (arm64) at a
-// scratch page so the g-reloads read mapped memory. On the re-executed launch
-// the host loader sets up real TLS, so the shim is a no-op. The code below is
-// otherwise complete and compiles; it is exercised end-to-end once the shim
-// lands. See the conversation notes / docs/PROFILE_U.md (pending).
+// Loader asymmetry (empirically established): musl's ld.so binds the
+// empty-SONAME symbols of a PT_INTERP-stripped binary directly, so on musl we
+// re-exec our own on-disk binary as-is. glibc's ld.so does NOT bind a
+// re-exec'd main object unless it carries a PT_INTERP -- so on glibc we hand
+// the loader an in-memory copy (memfd) of the binary with the PT_INTERP header
+// restored (restoreInterpToMemfd). The .interp string was left intact when the
+// interp was stripped; only the program header's p_type was cleared, so
+// restoring it is a single field write. Either way the loader then binds the
+// symbols from the pre-loaded libc.
 
 import "unsafe"
 
@@ -79,6 +79,12 @@ const (
 
 	guardVar = "GOFFI_UNIVERSAL_REEXEC=1"
 	guardKey = "GOFFI_UNIVERSAL_REEXEC="
+
+	// interp restore (glibc path)
+	mfdExec   = 0x0010 // MFD_EXEC (kernel 6.3+); fall back to 0 on older kernels
+	ptNull    = 0      // PT_NULL  (what the interp header was stripped to)
+	ptInterp  = 3      // PT_INTERP
+	copyChunk = 64 << 10
 )
 
 // Bump allocator over an mmap staging buffer for NUL-terminated C strings.
@@ -182,6 +188,142 @@ func diag(msg string) {
 	rawsyscall6(sysWrite, 2, uintptr(unsafe.Pointer(unsafe.StringData(msg))), uintptr(len(msg)), 0, 0, 0)
 }
 
+// procFdPath writes "/proc/self/fd/<fd>" (NUL-terminated) into the staging
+// buffer and returns a *byte to it, or nil if the buffer is exhausted.
+//
+//go:nosplit
+func procFdPath(fd uintptr) *byte {
+	const prefix = "/proc/self/fd/"
+	var digs [20]byte
+	di := len(digs)
+	v := fd
+	if v == 0 {
+		di--
+		digs[di] = '0'
+	}
+	for v > 0 {
+		di--
+		digs[di] = byte('0' + v%10)
+		v /= 10
+	}
+	pn := uintptr(len(prefix))
+	dn := uintptr(len(digs) - di)
+	if strBufBase == 0 || strBufOff+pn+dn+1 > strBufCap {
+		return nil
+	}
+	base := unsafe.Pointer(strBufBase)
+	start := strBufOff
+	for i := uintptr(0); i < pn; i++ {
+		*(*byte)(unsafe.Add(base, start+i)) = prefix[i]
+	}
+	for i := uintptr(0); i < dn; i++ {
+		*(*byte)(unsafe.Add(base, start+pn+i)) = digs[di+int(i)]
+	}
+	*(*byte)(unsafe.Add(base, start+pn+dn)) = 0
+	strBufOff = start + pn + dn + 1
+	return (*byte)(unsafe.Add(base, start))
+}
+
+// patchInterpInBuf finds the stripped PT_INTERP program header in an ELF64
+// header buffer (the first chunk of the file) and restores its p_type to
+// PT_INTERP. The stripped header is the PT_NULL entry whose p_offset points at
+// a path ('/'). Returns false if the header table is not fully present in buf
+// or no such entry is found.
+//
+//go:nosplit
+func patchInterpInBuf(buf unsafe.Pointer, n uintptr) bool {
+	if n < 64 {
+		return false
+	}
+	phoff := uintptr(*(*uint64)(unsafe.Add(buf, 0x20)))
+	phentsize := uintptr(*(*uint16)(unsafe.Add(buf, 0x36)))
+	phnum := uintptr(*(*uint16)(unsafe.Add(buf, 0x38)))
+	if phentsize < 56 || phoff+phnum*phentsize > n {
+		return false
+	}
+	for i := uintptr(0); i < phnum; i++ {
+		pe := phoff + i*phentsize
+		if *(*uint32)(unsafe.Add(buf, pe)) != ptNull {
+			continue
+		}
+		poff := uintptr(*(*uint64)(unsafe.Add(buf, pe+8))) // p_offset
+		if poff < n && *(*byte)(unsafe.Add(buf, poff)) == '/' {
+			*(*uint32)(unsafe.Add(buf, pe)) = ptInterp
+			return true
+		}
+	}
+	return false
+}
+
+// restoreInterpToMemfd copies /proc/self/exe into a new memfd with the
+// PT_INTERP header restored, and returns the memfd descriptor (an -errno-style
+// value on failure, testable with sysErr). The memfd is created without
+// MFD_CLOEXEC so it survives the upcoming execve and the loader can open it via
+// /proc/self/fd/<fd>. Used only on the glibc path.
+//
+//go:nosplit
+func restoreInterpToMemfd() uintptr {
+	nameC := cstr("goffi")
+	if nameC == nil {
+		return ^uintptr(0)
+	}
+	// No MFD_CLOEXEC: the fd must survive execve so the loader can open
+	// /proc/self/fd/<fd>. Prefer MFD_EXEC so the copy may be mapped
+	// executable; fall back to 0 on pre-6.3 kernels that reject the flag.
+	memfd := rawsyscall6(sysMemfdCreate, uintptr(unsafe.Pointer(nameC)), mfdExec, 0, 0, 0, 0)
+	if sysErr(memfd) {
+		memfd = rawsyscall6(sysMemfdCreate, uintptr(unsafe.Pointer(nameC)), 0, 0, 0, 0, 0)
+		if sysErr(memfd) {
+			return ^uintptr(0)
+		}
+	}
+	exeFd := rawsyscall6(sysOpenat, atFDCWD,
+		uintptr(unsafe.Pointer(cstr("/proc/self/exe"))), oRDONLY, 0, 0, 0)
+	if sysErr(exeFd) {
+		rawsyscall6(sysClose, memfd, 0, 0, 0, 0, 0)
+		return ^uintptr(0)
+	}
+	buf := mmapAnon(copyChunk)
+	ok := buf != nil && copyExeToMemfd(exeFd, memfd, buf)
+	rawsyscall6(sysClose, exeFd, 0, 0, 0, 0, 0)
+	if !ok {
+		rawsyscall6(sysClose, memfd, 0, 0, 0, 0, 0)
+		return ^uintptr(0)
+	}
+	return memfd
+}
+
+// copyExeToMemfd streams exeFd into memfd through buf, restoring the PT_INTERP
+// header in the first chunk. Returns false on any short or failed I/O. A plain
+// helper (not a closure) so nothing heap-allocates in this pre-scheduler code.
+//
+//go:nosplit
+func copyExeToMemfd(exeFd, memfd uintptr, buf unsafe.Pointer) bool {
+	first := true
+	for {
+		n := rawsyscall6(sysRead, exeFd, uintptr(buf), copyChunk, 0, 0, 0)
+		if sysErr(n) {
+			return false
+		}
+		if n == 0 {
+			return true
+		}
+		if first {
+			first = false
+			if !patchInterpInBuf(buf, n) {
+				return false
+			}
+		}
+		for off := uintptr(0); off < n; {
+			w := rawsyscall6(sysWrite, memfd, uintptr(unsafe.Add(buf, off)), n-off, 0, 0, 0)
+			if sysErr(w) || w == 0 {
+				return false
+			}
+			off += w
+		}
+	}
+}
+
 // maybeReexecUniversal is invoked at the very top of x_cgo_init. On the first
 // launch of a universal binary it re-execs through the host loader with libc
 // pre-loaded; on the re-executed launch (guard present) it returns immediately.
@@ -219,14 +361,14 @@ func maybeReexecUniversal() {
 	// Pick the host loader + libc SONAME by probing known loader paths.
 	// Prefer glibc when both are present; fall back to musl.
 	var loaderC, sonameC *byte
+	var isGlibc bool
 	if g := cstr(glibcLoader); fileExists(g) {
 		loaderC = g
 		sonameC = cstr(glibcLibc)
+		isGlibc = true
 	} else if m := cstr(muslLoader); fileExists(m) {
 		loaderC = m
 		sonameC = cstr(muslLibc)
-	}
-	if loaderC != nil {
 	}
 	if loaderC == nil || sonameC == nil {
 		diag("goffi: universal build: no known host dynamic loader found; FFI unavailable\n")
@@ -247,6 +389,20 @@ func maybeReexecUniversal() {
 	}
 	if exeC == nil {
 		exeC = cstr("/proc/self/exe")
+	}
+
+	// glibc only binds a re-exec'd main object that carries a PT_INTERP. Our
+	// on-disk binary has none (so the kernel can load it directly on musl), so
+	// give glibc an in-memory copy with the interp restored and point the
+	// loader at it. musl binds the no-interp binary directly and needs none of
+	// this. If the memfd copy fails we fall back to the real path (which will
+	// not bind on glibc, but the diagnostic below is best-effort anyway).
+	if isGlibc {
+		if fd := restoreInterpToMemfd(); !sysErr(fd) {
+			if p := procFdPath(fd); p != nil {
+				exeC = p
+			}
+		}
 	}
 
 	// Read original argv from /proc/self/cmdline (NUL-delimited).

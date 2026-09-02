@@ -267,9 +267,17 @@ is enabled (`Available()==true`) automatically — no change needed there.
 
 ## 5. Remaining work (ordered, concrete)
 
-1. **[BLOCKER] `setupUniversalTLS` shim** (amd64 asm + arm64 asm + no-op stub +
-   call site) — see §3. Then verify `UNIVERSAL-PROBE-OK` on glibc **and** musl.
-   *Nothing else is worth doing until this passes.*
+1. **[DONE] `setupUniversalTLS` shim** (amd64 asm + arm64 asm + no-op stub +
+   call site) — see §3. Landed; the first launch now sets up TLS and re-execs.
+
+1b. **[DONE] glibc no-interp binding.** glibc's `ld.so` only binds a re-exec'd
+   main object that carries a `PT_INTERP`; musl binds a no-interp binary
+   directly. The bridge now branches on the detected libc: on musl it re-execs
+   the on-disk binary as-is; on glibc it copies `/proc/self/exe` into a memfd
+   with the `PT_INTERP` header restored and re-execs that. **Result:
+   `UNIVERSAL-PROBE-OK` on both glibc and musl end-to-end (same binary,
+   autonomous re-exec).** The universal probe's FP check was switched from
+   `sqrt` (libm on glibc) to `atof` (libc on both).
 
 2. **`internal/loader` package** — the auditable "loader" port. A per-arch table
    (glibc/musl × amd64/arm64) of loader path + libc SONAME, plus runtime
@@ -400,8 +408,12 @@ previous commit).
 
 ## START HERE (immediate next action)
 
-Implement §3: add `setupUniversalTLS()` (amd64 asm now, arm64 asm + no-op stub),
-call it as the first statement of `x_cgo_init` before `maybeReexecUniversal()`,
-then run `scripts/build-universal.sh -o /tmp/uprobe ./cmd/universal-probe` and
-confirm `UNIVERSAL-PROBE-OK` on **both** glibc and musl. Only then proceed to
-§5.2 onward.
+The core mechanism is done: the universal build is green on both glibc and
+musl end-to-end (§5 items 1 and 1b). Continue with §5.2 onward — the
+`internal/loader` package and public API first, then `cmd/goffi-audit`, the
+purego-coexistence job, tests, both-libc CI, and the user-facing docs.
+
+Quick check that the mechanism still works after any change:
+`scripts/build-universal.sh -o /tmp/uprobe ./cmd/universal-probe`, then run
+`/tmp/uprobe` on glibc and inside an Alpine (musl) userland with `/proc`
+mounted; both must print `UNIVERSAL-PROBE-OK`.

@@ -17,6 +17,7 @@ const (
 	sysReadlinkat = 267
 	sysOpenat     = 257
 	sysFaccessat  = 269
+	sysMemfdCreate = 319
 )
 
 // Host dynamic loader + libc SONAME, per libc flavor, for amd64. These are the

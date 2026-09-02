@@ -17,6 +17,7 @@ const (
 	sysReadlinkat = 78
 	sysOpenat     = 56
 	sysFaccessat  = 48
+	sysMemfdCreate = 279
 )
 
 // Host dynamic loader + libc SONAME, per libc flavor, for arm64.

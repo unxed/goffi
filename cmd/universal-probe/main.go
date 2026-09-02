@@ -101,17 +101,20 @@ func main() {
 	defer ffi.FreeLibrary(handle)
 	check("LoadLibrary", true, lib)
 
-	// sqrt(2.0): double(double) -- FP register path.
-	sqrtFn := mustSym(handle, "sqrt")
-	sqrtCIF := mustCIF(types.DoubleTypeDescriptor, types.DoubleTypeDescriptor)
-	arg := 2.0
-	var root float64
-	if _, err := ffi.CallFunction(sqrtCIF, sqrtFn,
-		unsafe.Pointer(&root), []unsafe.Pointer{unsafe.Pointer(&arg)}); err != nil {
-		fmt.Printf("FAIL CallFunction(sqrt): %v\n", err)
+	// atof("2.0"): double(char*) -- FP return register path. atof lives in
+	// libc on both glibc and musl (sqrt is in libm on glibc, so it would not
+	// resolve from the libc handle on a glibc host).
+	atofFn := mustSym(handle, "atof")
+	atofCIF := mustCIF(types.DoubleTypeDescriptor, types.PointerTypeDescriptor)
+	numStr := "2.0\x00"
+	numPtr := unsafe.Pointer(unsafe.StringData(numStr))
+	var val float64
+	if _, err := ffi.CallFunction(atofCIF, atofFn,
+		unsafe.Pointer(&val), []unsafe.Pointer{unsafe.Pointer(&numPtr)}); err != nil {
+		fmt.Printf("FAIL CallFunction(atof): %v\n", err)
 		os.Exit(1)
 	}
-	check("sqrt(2.0)", math.Abs(root-math.Sqrt2) < 1e-12, fmt.Sprintf("= %v", root))
+	check("atof(\"2.0\")", math.Abs(val-2.0) < 1e-12, fmt.Sprintf("= %v", val))
 
 	// strlen: size_t(char*) -- integer return.
 	strlenFn := mustSym(handle, "strlen")
