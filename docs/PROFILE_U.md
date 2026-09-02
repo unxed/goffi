@@ -41,8 +41,14 @@ ffi.LibcKind()   // "glibc" | "musl" | "unknown"
 ## Limitations
 
 - **Linux only.** amd64 is run-tested; arm64 is cross-compile-verified.
-- A host whose dynamic loader goffi does not recognise cannot do FFI (the
-  process cannot bind a libc); that is a hard limitation of universal mode.
+- A host whose dynamic loader goffi does not recognise cannot do FFI: there is
+  nothing to re-exec through, so the process never binds a libc. It still
+  runs. The bridge says so once on stderr, clears `runtime.iscgo` so the Go
+  runtime creates threads with `clone(2)` and manages their TLS itself, and
+  from then on the binary behaves like one built without FFI: `ffi.Available()`
+  reports false, and `LoadLibrary`, `GetSymbol` and `CallFunction` return
+  `ffi.ErrNoHostLibc` rather than jumping to an unbound symbol. Branch on
+  `ffi.Available()` at startup if there is a pure-Go fallback to pick.
 - After the re-exec, `argv[0]` becomes the resolved executable path.
 - The universal build **owns the cgo runtime**; do not combine it with purego's
   fakecgo. To run goffi alongside purego, use the default build with
