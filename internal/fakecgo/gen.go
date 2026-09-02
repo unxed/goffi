@@ -263,7 +263,7 @@ func run() error {
 		case "linux":
 			// The go command also satisfies the linux build tag on Android,
 			// including for _linux.go files. Keep glibc imports out of Bionic.
-			goosTemplate = template.Must(template.New("symbols_linux.go").Parse(strings.Replace(templateSymbolsGoos, "//go:build !cgo", "//go:build !cgo && !android && !goffi_musl", 1)))
+			goosTemplate = template.Must(template.New("symbols_linux.go").Parse(strings.Replace(templateSymbolsGoos, "//go:build !cgo", "//go:build !cgo && !android && !goffi_musl && !goffi_universal", 1)))
 		case "android":
 			// Android uses a distinct build selector and symbol set. Keep the
 			// generated generic Linux imports out of the Android ELF.
@@ -307,7 +307,7 @@ func run() error {
 		{"amd64", "libc.musl-x86_64.so.1"},
 		{"arm64", "libc.musl-aarch64.so.1"},
 	} {
-		tag := "//go:build !cgo && !android && goffi_musl && " + mc.arch
+		tag := "//go:build !cgo && !android && goffi_musl && !goffi_universal && " + mc.arch
 		mt := template.Must(template.New("symbols_musl.go").Parse(
 			strings.Replace(templateSymbolsGoos, "//go:build !cgo", tag, 1)))
 		mb := &bytes.Buffer{}

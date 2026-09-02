@@ -4,7 +4,7 @@
 // SPDX-FileCopyrightText: 2022 The Ebitengine Authors
 // SPDX-FileCopyrightText: 2025-2026 Andrey Kolkov and GoGPU Contributors
 
-//go:build !cgo && !android && goffi_musl && amd64
+//go:build !cgo && !android && goffi_musl && !goffi_universal && amd64
 
 package fakecgo
 

@@ -524,3 +524,9 @@ MIT — see [LICENSE](LICENSE).
 ---
 
 *goffi v0.4.1 | [GitHub](https://github.com/go-webgpu/goffi) | [pkg.go.dev](https://pkg.go.dev/github.com/go-webgpu/goffi) | [Dev.to](https://dev.to/kolkov/goffi-zero-cgo-foreign-function-interface-for-go-how-we-call-c-libraries-without-a-c-compiler-ca5)*
+
+## Universal build (glibc + musl)
+
+One CGO-free binary can do FFI on both glibc and musl systems — see
+[docs/PROFILE_U.md](docs/PROFILE_U.md). Attribution for the Profile U concept
+(unxed/static-everywhere, pg83/solo) is in [NOTICE](NOTICE).

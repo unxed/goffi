@@ -1,4 +1,4 @@
-//go:build linux && !android && (amd64 || arm64) && !goffi_static && !goffi_musl
+//go:build linux && !android && (amd64 || arm64) && !goffi_static && !goffi_musl && !goffi_universal
 
 package syscall
 

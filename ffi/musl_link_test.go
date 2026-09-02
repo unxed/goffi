@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -93,10 +92,7 @@ func readInterp(t *testing.T, f *elf.File) string {
 func buildMuslProbe(t *testing.T, root, goarch, out string) {
 	t.Helper()
 
-	goTool := filepath.Join(runtime.GOROOT(), "bin", "go")
-	if _, err := os.Stat(goTool); err != nil {
-		goTool = "go"
-	}
+	goTool := goToolPath()
 
 	cmd := exec.Command(goTool, "build",
 		"-tags", "goffi_musl",

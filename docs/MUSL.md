@@ -95,3 +95,8 @@ fakecgo's pthread imports.
 | glibc distros (Debian, Fedora, …) | default (no tags) |
 | Alpine, postmarketOS, other musl distros | `-tags goffi_musl` + the `-gcflags` line above |
 | `scratch` / distroless containers, no libc at all | `-tags goffi_static` (FFI off — there are no `.so` files to load there anyway) |
+
+## Single binary for both libcs
+
+Instead of separate glibc and `-tags goffi_musl` binaries, the universal build
+produces one CGO-free binary that runs on both. See [PROFILE_U.md](PROFILE_U.md).
