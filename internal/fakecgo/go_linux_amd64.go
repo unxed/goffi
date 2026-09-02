@@ -6,7 +6,11 @@
 
 package fakecgo
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/go-webgpu/goffi/internal/hostlibc"
+)
 
 //go:nosplit
 func _cgo_sys_thread_start(ts *ThreadStart) {
@@ -73,6 +77,28 @@ func x_cgo_init(g *G, setg uintptr) {
 	//    reexec_universal_linux.go.
 	setupUniversalTLS()
 	maybeReexecUniversal()
+	if hostlibc.Missing {
+		// The bridge could not reach a libc, so every symbol this function
+		// would use next -- malloc, the pthread_attr_* trio -- is unbound and
+		// calling one faults. Give the process back to the Go runtime as a
+		// pure-Go program instead of dying here.
+		//
+		// Clearing iscgo is what makes that work. The runtime read _cgo_init
+		// long before this call and took the branch that delegates TLS setup
+		// to us (setupUniversalTLS did it, onto a scratch page), but every
+		// later decision -- creating an M with pthread_create versus clone(2),
+		// keeping g in TLS versus the g register, installing signal handlers
+		// the cgo way -- is made by reading runtime.iscgo at the point of use.
+		// False from here on means the runtime never calls into the libc that
+		// is not there, and threads it starts set up their own TLS.
+		//
+		// g.stacklo keeps the bounds rt0_go computed (SP minus 64 KiB); the
+		// pthread_attr_getstacksize refinement below is exactly what a
+		// CGO_ENABLED=0 binary does without, so nothing is lost.
+		_iscgo = false
+		setg_func = setg
+		return
+	}
 
 	var size size_t
 	var attr *pthread_attr_t

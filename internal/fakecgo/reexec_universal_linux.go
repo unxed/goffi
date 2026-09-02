@@ -58,7 +58,11 @@ package fakecgo
 // restoring it is a single field write. Either way the loader then binds the
 // symbols from the pre-loaded libc.
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/go-webgpu/goffi/internal/hostlibc"
+)
 
 func rawsyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1 uintptr)
 
@@ -328,29 +332,50 @@ func copyExeToMemfd(exeFd, memfd uintptr, buf unsafe.Pointer) bool {
 // launch of a universal binary it re-execs through the host loader with libc
 // pre-loaded; on the re-executed launch (guard present) it returns immediately.
 //
+// maybeReexecUniversal is invoked at the very top of x_cgo_init. It either
+// hands the process a libc or records that it could not.
+//
+// Failing to is not fatal by itself: x_cgo_init then drops the process back to
+// a pure-Go runtime (see go_linux_{amd64,arm64}.go) and the FFI entry points
+// report hostlibc.ErrMissing instead of jumping to unbound symbols. Recording
+// it is what makes that possible, so every failure path below has to be seen
+// -- hence the split into a function that returns whether a libc is there.
+//
 //go:nosplit
 func maybeReexecUniversal() {
+	if !reexecUniversal() {
+		hostlibc.Missing = true
+	}
+}
+
+// reexecUniversal reports whether this process has a libc. It returns true
+// only when the guard variable shows we already came through the host loader,
+// and false on every path that leaves the empty-SONAME imports unbound. When
+// the re-exec succeeds it does not return at all.
+//
+//go:nosplit
+func reexecUniversal() bool {
 	// Staging buffer for C strings first: everything below needs cstr().
 	sb := mmapAnon(strBufCap)
 	if sb == nil {
-		return
+		return false
 	}
 	strBufBase = uintptr(sb)
 	strBufOff = 0
 
 	envBase := mmapAnon(envBufCap)
 	if envBase == nil {
-		return
+		return false
 	}
 	envLen := readAll(cstr("/proc/self/environ"), envBase, envBufCap)
 	if envLen < 0 {
-		return
+		return false
 	}
 
 	// Guard: if we already re-executed, do nothing.
 	for off := 0; off < envLen; {
 		if matchAt(envBase, off, envLen, guardKey) {
-			return
+			return true
 		}
 		for off < envLen && *(*byte)(unsafe.Add(envBase, off)) != 0 {
 			off++
@@ -371,8 +396,8 @@ func maybeReexecUniversal() {
 		sonameC = cstr(muslLibc)
 	}
 	if loaderC == nil || sonameC == nil {
-		diag("goffi: universal build: no known host dynamic loader found; FFI unavailable\n")
-		return
+		diag("goffi: universal build: no known host dynamic loader found; continuing without FFI\n")
+		return false
 	}
 
 	// Resolve our own executable path for the loader to run.
@@ -408,22 +433,22 @@ func maybeReexecUniversal() {
 	// Read original argv from /proc/self/cmdline (NUL-delimited).
 	cmdBase := mmapAnon(cmdBufCap)
 	if cmdBase == nil {
-		return
+		return false
 	}
 	cmdLen := readAll(cstr("/proc/self/cmdline"), cmdBase, cmdBufCap)
 	if cmdLen < 0 {
-		return
+		return false
 	}
 
 	// Build argv: {loader, "--preload", soname, self, <original argv[1:]...>, NULL}
 	argvBase := mmapAnon(ptrArrSize)
 	envpBase := mmapAnon(ptrArrSize)
 	if argvBase == nil || envpBase == nil {
-		return
+		return false
 	}
 	preloadC := cstr("--preload")
 	if preloadC == nil {
-		return
+		return false
 	}
 	ai := 0
 	setPtr(argvBase, ai, uintptr(unsafe.Pointer(loaderC)))
@@ -476,5 +501,6 @@ func maybeReexecUniversal() {
 		uintptr(envpBase), 0, 0, 0)
 
 	// Only reached if execve failed.
-	diag("goffi: universal build: re-exec through host loader failed; FFI unavailable\n")
+	diag("goffi: universal build: re-exec through host loader failed; continuing without FFI\n")
+	return false
 }
