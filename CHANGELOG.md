@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **NetBSD amd64/arm64 support** — full FFI tier: `LoadLibrary`, `CallFunction`
+  and `NewCallback`. NetBSD keeps the `dlopen` family in `libc.so` (like
+  FreeBSD), and its errno accessor is `__errno`, not glibc's `__errno_location`
+  or FreeBSD/macOS `__error`. Adds `internal/dl/dl_netbsd.go`,
+  `internal/dl/dl_netbsd_dynamic.go` and `internal/syscall/errno_netbsd.go`;
+  `netbsd` joins the Unix-family build constraints across 34 files. Reuses the
+  existing System V and AAPCS64 backends unchanged. Requires
+  `-gcflags="github.com/go-webgpu/goffi/internal/fakecgo=-std"`, same as FreeBSD.
+- **`scripts/check-platforms.sh`** — the single source of truth for the platform
+  matrix. Builds and links every target purego supports under `CGO_ENABLED=0`,
+  asserts the tier each one claims, and fails if a target listed as `pending`
+  starts building, so the published table cannot silently go stale.
+- **`docs/PLATFORMS.md`** — tier definitions, required build flags, purego parity
+  diff, and the per-architecture cost breakdown for the pending targets.
+- **ROADMAP: "Architecture Expansion"** — sequenced plan for the six remaining
+  Linux architectures (riscv64, loong64, 386, arm, ppc64le, s390x), with the
+  per-architecture hazards and the rule that nothing is promoted out of `pending`
+  on cross-compilation alone.
+- **windows/386 documented as a `load` tier** — `LoadLibrary`, `GetSymbol` and
+  `NewCallback` work; `CallFunction` returns `ErrUnsupportedArchitecture`. This
+  already built, it was just never stated. Mirrors purego's own windows/386 shape.
+
+### Fixed
+- **FreeBSD AMD64: callbacks jumped into a data page.** `ffi/callback_amd64.s`
+  carried `(linux || darwin) && amd64` while `ffi/callback.go` carried
+  `(linux || darwin || freebsd) && amd64`. On freebsd/amd64 the assembly was
+  excluded, so the `//go:linkname _callbackTrampoline
+  github.com/go-webgpu/goffi/ffi.callbackTrampoline` *variable* became the
+  definition of that symbol and `trampolineBaseAddr` pointed at one byte of Go
+  data instead of the 2000-entry trampoline table. Everything compiled and
+  linked; every callback would have transferred control into `.data` at runtime.
+  `go tool nm` reported `D` where it must report `T`.
+  `scripts/check-platforms.sh` now gates this on every target whose callbacks
+  come from goffi's own assembly.
+- **NetBSD fakecgo did not export `environ`/`__progname`/`__ps_strings`
+  dynamically.** `//go:linkname` alone produces a local definition. NetBSD's
+  `libc.so` carries undefined references to all three (crt0 normally defines
+  them) and rtld resolves them against the main object at startup, so the
+  process would have died before `main`. Added `//go:cgo_export_dynamic`,
+  matching `freebsd.go`.
+
+### Changed
+- CI: the hand-rolled `cross-compile` job is replaced by `platform-matrix`,
+  which runs `scripts/check-platforms.sh`.
+
 ## [0.6.3] - 2026-08-01
 
 ### Fixed

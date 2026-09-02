@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Andrey Kolkov and GoGPU Contributors
 
-//go:build ((linux && !android) || darwin || freebsd) && goffi_static
+//go:build ((linux && !android) || darwin || freebsd || netbsd) && goffi_static
 
 // Static build: no libc, hence no errno location to import.
 

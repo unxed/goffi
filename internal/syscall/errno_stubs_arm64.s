@@ -1,4 +1,4 @@
-//go:build ((((linux && !android) || darwin || freebsd) && !goffi_static) || (android && !cgo)) && arm64
+//go:build ((((linux && !android) || darwin || freebsd || netbsd) && !goffi_static) || (android && !cgo)) && arm64
 
 #include "textflag.h"
 
