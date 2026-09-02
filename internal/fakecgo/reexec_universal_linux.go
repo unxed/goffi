@@ -226,6 +226,8 @@ func maybeReexecUniversal() {
 		loaderC = m
 		sonameC = cstr(muslLibc)
 	}
+	if loaderC != nil {
+	}
 	if loaderC == nil || sonameC == nil {
 		diag("goffi: universal build: no known host dynamic loader found; FFI unavailable\n")
 		return
