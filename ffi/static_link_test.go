@@ -69,7 +69,7 @@ func TestStaticBuildProducesStaticBinary(t *testing.T) {
 
 			// DynamicSection returns an error when there is no .dynamic
 			// section at all, which is exactly the outcome we want.
-			if needed, err := f.DynString(elf.DT_NEEDED); err == nil && len(needed) > 0 {
+			if needed, derr := f.DynString(elf.DT_NEEDED); derr == nil && len(needed) > 0 {
 				t.Errorf("binary still depends on shared libraries: %v", needed)
 			}
 
@@ -116,13 +116,31 @@ func writeProbeModule(t *testing.T) string {
 	return dir
 }
 
+// goToolPath returns the path to the go command. It prefers the go binary in
+// the active GOROOT (as reported by "go env GOROOT"), falling back to whatever
+// "go" resolves to on PATH. runtime.GOROOT was deprecated in Go 1.24 because
+// the build-time GOROOT is meaningless once a binary is moved, so the value is
+// queried from the tool at run time instead. Shared with musl_link_test.go.
+func goToolPath() string {
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		return "go"
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return "go"
+	}
+	tool := filepath.Join(root, "bin", "go")
+	if _, statErr := os.Stat(tool); statErr != nil {
+		return "go"
+	}
+	return tool
+}
+
 func build(t *testing.T, dir, goarch, out string) {
 	t.Helper()
 
-	goTool := filepath.Join(runtime.GOROOT(), "bin", "go")
-	if _, err := os.Stat(goTool); err != nil {
-		goTool = "go"
-	}
+	goTool := goToolPath()
 
 	cmd := exec.Command(goTool, "build", "-tags", "goffi_static", "-o", out, ".")
 	cmd.Dir = dir

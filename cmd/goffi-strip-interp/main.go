@@ -46,7 +46,7 @@ func main() {
 	os.Exit(status)
 }
 
-func stripInterp(path string) error {
+func stripInterp(path string) (err error) {
 	// Read enough of the ELF header to locate the program header table.
 	f, err := elf.Open(path)
 	if err != nil {
@@ -61,7 +61,7 @@ func stripInterp(path string) error {
 			break
 		}
 	}
-	f.Close()
+	_ = f.Close()
 
 	if interpIdx < 0 {
 		return nil // already interpreter-less; nothing to do
@@ -71,7 +71,11 @@ func stripInterp(path string) error {
 	if err != nil {
 		return err
 	}
-	defer fh.Close()
+	defer func() {
+		if cerr := fh.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	// Re-read the raw ELF header fields we need. Offsets are fixed by the ELF
 	// spec and differ between the 32- and 64-bit forms.

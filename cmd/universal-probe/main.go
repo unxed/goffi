@@ -98,7 +98,7 @@ func main() {
 		fmt.Printf("FAIL LoadLibrary(%s): %v\n", lib, err)
 		os.Exit(1)
 	}
-	defer ffi.FreeLibrary(handle)
+	defer func() { _ = ffi.FreeLibrary(handle) }()
 	check("LoadLibrary", true, lib)
 
 	// atof("2.0"): double(char*) -- FP return register path. atof lives in
@@ -180,7 +180,7 @@ func main() {
 			defer wg.Done()
 			runtime.LockOSThread()
 			var m uint64
-			ffi.CallFunction(strlenCIF, strlenFn,
+			_, _ = ffi.CallFunction(strlenCIF, strlenFn,
 				unsafe.Pointer(&m), []unsafe.Pointer{unsafe.Pointer(&sp)})
 			runtime.UnlockOSThread()
 		}()

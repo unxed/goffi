@@ -89,7 +89,7 @@ func main() {
 		fmt.Printf("FAIL LoadLibrary(%s): %v\n", lib, err)
 		os.Exit(1)
 	}
-	defer ffi.FreeLibrary(handle)
+	defer func() { _ = ffi.FreeLibrary(handle) }()
 	check("LoadLibrary", true, lib)
 
 	// sqrt(2.0): double(double). Exercises the SSE/FP register path.
@@ -97,7 +97,7 @@ func main() {
 	sqrtCIF := mustCIF(types.DoubleTypeDescriptor, types.DoubleTypeDescriptor)
 	arg := 2.0
 	var root float64
-	if _, err := ffi.CallFunction(sqrtCIF, sqrtFn,
+	if _, err = ffi.CallFunction(sqrtCIF, sqrtFn,
 		unsafe.Pointer(&root), []unsafe.Pointer{unsafe.Pointer(&arg)}); err != nil {
 		fmt.Printf("FAIL CallFunction(sqrt): %v\n", err)
 		os.Exit(1)
@@ -110,7 +110,7 @@ func main() {
 	s := "goffi on musl\x00"
 	sp := unsafe.Pointer(unsafe.StringData(s))
 	var n uint64
-	if _, err := ffi.CallFunction(strlenCIF, strlenFn,
+	if _, err = ffi.CallFunction(strlenCIF, strlenFn,
 		unsafe.Pointer(&n), []unsafe.Pointer{unsafe.Pointer(&sp)}); err != nil {
 		fmt.Printf("FAIL CallFunction(strlen): %v\n", err)
 		os.Exit(1)
@@ -121,7 +121,7 @@ func main() {
 	getpidFn := mustSym(handle, "getpid")
 	getpidCIF := mustCIF(types.SInt32TypeDescriptor)
 	var pid int32
-	if _, err := ffi.CallFunction(getpidCIF, getpidFn,
+	if _, err = ffi.CallFunction(getpidCIF, getpidFn,
 		unsafe.Pointer(&pid), nil); err != nil {
 		fmt.Printf("FAIL CallFunction(getpid): %v\n", err)
 		os.Exit(1)
