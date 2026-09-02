@@ -1,6 +1,15 @@
 #include <stdint.h>
 #include <stdarg.h>
 
+// Scalar float returns use XMM0 on Windows AMD64. Keep a pointer argument so
+// the end-to-end tests exercise the same call shape as pointer-based native APIs.
+float return_float32(const void *value) {
+    return value ? 0.125f : 0.0f;
+}
+double return_float64(const void *value) {
+    return value ? 0.625 : 0.0;
+}
+
 // ≤ 8 bytes: {int32, uint32} — INTEGER class, single GP register
 struct pair_i32_u32 { int32_t a; uint32_t b; };
 int64_t take_struct_8(struct pair_i32_u32 s) {
@@ -83,6 +92,15 @@ struct mixed_float_int return_struct_float_int(double a, int64_t b) {
 struct return_pair_i64 { int64_t a; int64_t b; };
 struct return_pair_i64 return_struct_2ints(int64_t a, int64_t b) {
     struct return_pair_i64 s = {.a = a, .b = b};
+    return s;
+}
+
+// 24-byte struct (> 16 bytes) returned by value through the sret ABI: the caller
+// passes a hidden destination pointer (RDI on SysV AMD64, X8 on AAPCS64) and the
+// callee writes the struct into it. The Go test calls this with a real rvalue
+// buffer and checks the returned fields. triple_i64 is defined above.
+struct triple_i64 return_struct_24(void) {
+    struct triple_i64 s = {.a = 11, .b = 22, .c = 33};
     return s;
 }
 

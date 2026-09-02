@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2022 The Ebitengine Authors
+// SPDX-FileCopyrightText: 2025-2026 Andrey Kolkov and GoGPU Contributors
 
-//go:build !cgo && (darwin || freebsd || linux || netbsd)
+//go:build !cgo && (darwin || freebsd || linux || netbsd) && !android
 
 package fakecgo
+
+import "structs"
 
 type (
 	size_t uintptr
@@ -28,11 +31,13 @@ const (
 )
 
 type G struct {
+	_       structs.HostLayout
 	stacklo uintptr
 	stackhi uintptr
 }
 
 type ThreadStart struct {
+	_   structs.HostLayout
 	g   *G
 	tls *uintptr
 	fn  uintptr

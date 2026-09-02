@@ -21,7 +21,7 @@ sym, _ := ffi.GetSymbol(handle, "wgpuCreateInstance")
 
 cif := &types.CallInterface{}
 ffi.PrepareCallInterface(cif, types.DefaultCall, returnType, argTypes)
-ffi.CallFunction(cif, sym, unsafe.Pointer(&result), args)
+_, _ = ffi.CallFunction(cif, sym, unsafe.Pointer(&result), args)
 ```
 
 ---
@@ -32,11 +32,12 @@ ffi.CallFunction(cif, sym, unsafe.Pointer(&result), args)
 |---|---------|---------|
 | **Zero CGO** | Pure Go | No C compiler needed. `go get` and build. |
 | **Fast** | 88–114 ns/op | Pre-computed CIF, zero per-call allocations |
-| **Cross-platform** | 7 targets | Windows, Linux, macOS, FreeBSD × AMD64 + ARM64 |
-| **Callbacks** | C→Go safe | `crosscall2` integration, struct args, works from any C thread |
+| **Cross-platform** | 8 desktop targets + Android preview | Windows, Linux, macOS, FreeBSD × AMD64 + ARM64; Android arm64/API 29+ candidate pending physical-device startup proof |
+| **Callbacks** | C→Go safe where validated | `crosscall2` integration on desktop targets; Android callbacks fail explicitly until a physical-thread proof exists |
 | **Type-safe** | Runtime validation | 5 typed error types with `errors.As()` support |
 | **Struct pass/return** | Full ABI | Args: INTEGER/SSE classification. Returns: ≤8B (RAX/XMM0), 9–16B (4 modes: RAX/XMM × RAX/XMM), >16B (sret) |
 | **Variadic** | `printf`/`sprintf` | `PrepareVariadicCallInterface` — Apple ARM64 stack-force included |
+| **errno** | Always captured | Thread-safe assembly-level capture — first pure-Go FFI on Linux |
 | **Context** | Timeouts | `CallFunctionContext(ctx, ...)` cancellation |
 | **Race detector** | `-race` compatible | `CGO_ENABLED=1 go test -race` works cleanly |
 | **Tested** | 89% coverage | CI on Linux, Windows, macOS (CGO=0 and CGO=1) |
@@ -44,6 +45,11 @@ ffi.CallFunction(cif, sym, unsafe.Pointer(&result), args)
 ---
 
 ## Quick Start
+
+Android arm64/API 29+ is a preview candidate in both CGO modes. Cross-build,
+ABI, and ELF probes pass, but physical-device startup proof is still pending;
+see [docs/ANDROID.md](docs/ANDROID.md) for the runtime ABI, NDK probe, and the
+intentional callback limitation.
 
 ### Installation
 
@@ -115,7 +121,7 @@ func main() {
 	strPtr := uintptr(unsafe.Pointer(unsafe.StringData(testStr)))
 	var length uint64
 
-	err = ffi.CallFunction(cif, strlen, unsafe.Pointer(&length), []unsafe.Pointer{unsafe.Pointer(&strPtr)})
+	_, err = ffi.CallFunction(cif, strlen, unsafe.Pointer(&length), []unsafe.Pointer{unsafe.Pointer(&strPtr)})
 	if err != nil {
 		panic(err)
 	}
@@ -153,7 +159,7 @@ err := ffi.PrepareVariadicCallInterface(
 count := int64(3)
 a1, a2, a3 := int64(10), int64(20), int64(30)
 var result int64
-ffi.CallFunction(&cif, sym, unsafe.Pointer(&result), []unsafe.Pointer{
+_, _ = ffi.CallFunction(&cif, sym, unsafe.Pointer(&result), []unsafe.Pointer{
     unsafe.Pointer(&count),
     unsafe.Pointer(&a1),
     unsafe.Pointer(&a2),
@@ -166,6 +172,62 @@ A new CIF must be prepared for each unique combination of variadic argument type
 portion of the CIF can be reused by re-calling `PrepareVariadicCallInterface` with different
 variadic arg type slices.
 
+### Example: Passing and Returning Structs
+
+goffi handles C struct pass-by-value across all ABI size classes. Describe the struct layout
+with a `TypeDescriptor`, then pass struct values directly via `unsafe.Pointer(&s)`.
+
+```go
+// C struct: typedef struct { int64_t x; int64_t y; } Point;
+pointType := &types.TypeDescriptor{
+    Kind:      types.StructType,
+    Size:      16,          // must match C sizeof(Point)
+    Alignment: 8,           // must match C alignof(Point)
+    Members: []*types.TypeDescriptor{
+        types.SInt64TypeDescriptor, // x
+        types.SInt64TypeDescriptor, // y
+    },
+}
+
+var cif types.CallInterface
+ffi.PrepareCallInterface(&cif, types.DefaultCall,
+    pointType,                                            // return: Point
+    []*types.TypeDescriptor{types.SInt64TypeDescriptor, types.SInt64TypeDescriptor},
+)
+
+x, y := int64(3), int64(4)
+var result Point
+_, _ = ffi.CallFunction(&cif, makePointFn,
+    unsafe.Pointer(&result),                              // buffer for struct return value
+    []unsafe.Pointer{unsafe.Pointer(&x), unsafe.Pointer(&y)},
+)
+// result.X == 3, result.Y == 4
+
+// Pass struct as argument:
+var distCif types.CallInterface
+ffi.PrepareCallInterface(&distCif, types.DefaultCall,
+    types.SInt64TypeDescriptor,
+    []*types.TypeDescriptor{pointType, pointType},        // two Point args
+)
+
+a := Point{X: 0, Y: 0}
+b := Point{X: 3, Y: 4}
+var dist int64
+_, _ = ffi.CallFunction(&distCif, distFn,
+    unsafe.Pointer(&dist),
+    []unsafe.Pointer{unsafe.Pointer(&a), unsafe.Pointer(&b)}, // pointer to struct data
+)
+// dist == 25
+```
+
+Structs >16 bytes are returned via hidden pointer (sret) — goffi handles this transparently.
+
+> **Note:** On Windows AMD64, struct arguments containing float fields are not supported
+> due to `syscall.SyscallN` limitations. Use integer-only structs for cross-platform code,
+> or pass float fields as individual arguments.
+
+See [`examples/struct/`](examples/struct/) for a complete working example with compile-and-run.
+
 ---
 
 ## Performance
@@ -174,9 +236,11 @@ variadic arg type slices.
 
 | Benchmark | Time | Allocations |
 |-----------|------|-------------|
-| Empty function (`getpid`) | 88 ns | 2 allocs |
-| Integer argument (`abs`) | 114 ns | 3 allocs |
-| String processing (`strlen`) | 98 ns | 3 allocs |
+| Empty function (`getpid`) | 88 ns | 0 allocs (steady state) |
+| Integer argument (`abs`) | 114 ns | 0 allocs (steady state) |
+| String processing (`strlen`) | 98 ns | 0 allocs (steady state) |
+
+`syscallArgs` is heap-allocated via `sync.Pool` for callback safety (goroutine stack may move during C→Go callbacks). Pool reuse gives 0 allocs/op in steady state.
 
 At 60 FPS with ~50 FFI calls per frame, overhead is **5 µs per frame** — 0.03% of the 16.6 ms budget. Unmeasurable in profiling.
 
@@ -226,7 +290,7 @@ cb := ffi.NewCallback(func(status uint32, adapter uintptr, msg uintptr, ud uintp
     close(done)
 })
 
-ffi.CallFunction(cif, wgpuRequestAdapter, nil, args)
+_, _ = ffi.CallFunction(cif, wgpuRequestAdapter, nil, args)
 <-done // Wait for GPU driver callback
 ```
 
@@ -273,7 +337,7 @@ if err != nil {
 | Context support | Timeouts/cancellation | No | No |
 | C-thread callbacks | crosscall2 | crosscall2 | Full |
 | String/bool/slice args | Raw pointers only | Auto-marshaling | Full |
-| Platform breadth | 7 targets | 8 GOARCH / 20+ OS×ARCH | All |
+| Platform breadth | 8 desktop targets + Android preview | 8 GOARCH / 20+ OS×ARCH | All |
 | AMD64 overhead | 88–114 ns | Not published | ~140 ns (Go 1.26 claims ~30% reduction) |
 
 **Choose goffi** for GPU/real-time workloads: struct passing, zero per-call overhead, callback float returns, typed errors.
@@ -291,9 +355,6 @@ if err != nil {
 **Windows: C++ exceptions may crash the program** ([#12516](https://github.com/golang/go/issues/12516))
 - Go runtime limitation, not goffi-specific. Go 1.22+ added partial SEH support ([#58542](https://github.com/golang/go/issues/58542)), but edge cases remain.
 - Workaround: build native libraries with `panic=abort`.
-
-**Windows: float return values not captured from XMM0**
-- `syscall.SyscallN` returns RAX only. Go `syscall` package limitation.
 
 **Apple ARM64: variadic args always go on stack**
 - Per Apple's AAPCS64 extension, variadic arguments must be passed on the stack even when GP/FP registers are available. Use `PrepareVariadicCallInterface` (not `PrepareCallInterface`) for variadic C functions on all platforms — goffi handles the Darwin-specific register flush automatically.
@@ -326,6 +387,8 @@ if err != nil {
 | macOS | amd64 | System V | v0.1.1 | Tested |
 | macOS | arm64 | AAPCS64 | v0.3.7 | Tested (M3 Pro) |
 | FreeBSD | amd64 | System V | v0.5.0 | Cross-compile verified |
+| FreeBSD | arm64 | AAPCS64 | v0.5.3 | Cross-compile verified |
+| Android | arm64 | AAPCS64 (Bionic) | v0.6.1 | Guarded preview (API 29+) |
 
 ---
 
@@ -400,6 +463,18 @@ goffi powers an ecosystem of pure Go GPU libraries:
 | [wgpu-native](https://github.com/gfx-rs/wgpu-native) | Native WebGPU implementation (upstream) |
 
 ---
+
+
+
+## Star History
+
+<a href="https://starhistory.io">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.starhistory.io/png?repos=go-webgpu/goffi&style=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.starhistory.io/png?repos=go-webgpu/goffi&style=professional" />
+   <img alt="Star History Chart" src="https://api.starhistory.io/png?repos=go-webgpu/goffi" width="800" />
+ </picture>
+</a>
 
 ## License
 

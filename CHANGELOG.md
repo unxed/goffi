@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-08-01
+
+### Fixed
+- **ARM64: HFA return checkptr crash** — `handleHFAReturn` cast `(*[4]float64)(rvalue)` was oversized for 2-3 element HFAs (CGSize, CGPoint = 16 bytes, cast = 32 bytes). `go test -race` (checkptr) crashed with "converted pointer straddles multiple allocations". Fix: per-element writes via `unsafe.Add`. ([#67](https://github.com/go-webgpu/goffi/issues/67), reported by @jbunds)
+- **ARM64: 9-16B struct return silent corruption** — `(*[2]uint64)(rvalue)` wrote 8 full bytes for the hi word even when struct was smaller than 16 bytes. Fix: `copy` with exact remaining size, matching AMD64 pattern. Proactive fix — checkptr doesn't catch this (GC pads to 16), but packed C structs could trigger corruption
+- Added `TestHandleHFAReturn_Checkptr` and `TestHandleHFAReturn_Float32` unit tests
+
+## [0.6.2] - 2026-07-22
+
+### Fixed
+- **Windows AMD64 scalar float returns** — recover `float32` and `float64` values from the XMM0 bits exposed as the second result of `syscall.SyscallN`. Go's `asmstdcall` already copies XMM0 into the second return slot — goffi was receiving but discarding it. Resolves long-standing known issue TASK-019. ([PR #65](https://github.com/go-webgpu/goffi/pull/65) by [@besmpl](https://github.com/besmpl))
+- Removed "Windows float returns not captured" from README Known Limitations
+
+## [0.6.1] - 2026-07-21
+
+### Added
+- **Android ARM64 Bionic support (guarded preview)** — Android arm64/API 29+ platform with Bionic loader, `__errno` routing, four-argument `_cgo_init` startup, TLS slot validation, and dual CGO mode support. Callbacks explicitly rejected pending physical-device thread proof. Cross-build, ABI, and ELF gates pass on NDK r29 with Go 1.25.12 and Go 1.26.5. ([PR #62](https://github.com/go-webgpu/goffi/pull/62) by [@besmpl](https://github.com/besmpl))
+- **Android CI matrix** — NDK r29 cross-build and ELF dependency audits for Go 1.25.12 + Go 1.26.5 in both CGO modes
+- **`docs/ANDROID.md`** — runtime ABI contract, NDK probe, callback limitation, and build instructions
+- **@besmpl added as CODEOWNER** for Android paths (`*android*` across `ffi/`, `internal/dl/`, `internal/fakecgo/`, `internal/syscall/`)
+
+### Changed
+- **fakecgo naming cleanup** — all `purego_` dynamic import symbols renamed to `goffi_` across `internal/fakecgo/` (18 files). Dual copyright attribution: Ebitengine Authors + Andrey Kolkov and GoGPU Contributors. ([PR #63](https://github.com/go-webgpu/goffi/pull/63))
+- **LICENSE** updated to `Andrey Kolkov and GoGPU Contributors` (matching gogpu ecosystem pattern)
+- **NOTICE** file added documenting Apache-2.0 heritage of fakecgo from ebitengine/purego
+- Platform count: 8 desktop targets + Android ARM64 preview (9 total)
+
+## [0.6.0] - 2026-07-12
+
+### Added
+- **errno capture in assembly trampoline** — `CallFunction` now always captures C `errno` inside the assembly trampoline immediately after the C function returns, before the Go runtime can migrate the goroutine to a different OS thread. This is the only thread-safe window for errno capture. goffi is the first pure-Go FFI with correct errno capture on Linux. ([#60](https://github.com/go-webgpu/goffi/issues/60))
+- Platform-specific errno resolution: `__errno_location` (Linux glibc/musl), `__error` (macOS/FreeBSD) via `//go:cgo_import_dynamic`
+
+### Changed
+- **BREAKING: `CallFunction` returns `(syscall.Errno, error)`** — errno is always captured and returned. Callers that don't need errno use `_, err := ffi.CallFunction(...)`. This replaces the opt-in `CallFunctionErrno` which was a pit of failure (you don't know you need errno until the function fails)
+- **BREAKING: `CallFunctionContext` returns `(syscall.Errno, error)`** — same change with context support
+- **BREAKING: `FunctionCaller.Execute` interface changed** — now accepts `errnoFn uintptr` parameter and returns `(cerrno uintptr, err error)`
+- Removed `CallFunctionErrno` / `CallFunctionErrnoContext` (superseded by always-capture)
+- Removed `FunctionCallerErrno` interface (merged into `FunctionCaller`)
+- Reduced code by 429 lines (eliminated Execute/ExecuteErrno duplication)
+
+### Migration Guide
+
+```go
+// Before (v0.5.x):
+err := ffi.CallFunction(cif, fn, &result, args)
+
+// After (v0.6.0):
+errno, err := ffi.CallFunction(cif, fn, &result, args)
+// Or if errno not needed:
+_, err := ffi.CallFunction(cif, fn, &result, args)
+```
+
+## [0.5.6] - 2026-07-05
+
+### Fixed
+- **Critical: callback stack-move corruption** — when a C callback re-enters Go and grows the goroutine stack (`copystack`), `syscallArgs` on the goroutine stack would move but `syscallN` on g0 still held the old address, writing return values to freed memory. Fix: `syscallArgs` is now heap-allocated via `sync.Pool`, immune to `copystack`. Reverts the unsafe `//go:noescape` optimization from v0.5.4. Discovered and fixed by [@tie](https://github.com/tie) with `TestCallbackGrowStack` reproducer. ([PR #59](https://github.com/go-webgpu/goffi/pull/59))
+- **sret cleanup** — simplified >16B struct return path in `call_unix.go`, removed redundant `sretBuf` variable
+- **Added `TestStructReturn24B`** — end-to-end test for >16B struct return via sret hidden pointer
+
+## [0.5.5] - 2026-06-15
+
+### Fixed
+- **Example: avalue pointer bug** — `examples/simple/main.go` passed string pointer directly as avalue instead of pointer-to-pointer on Windows/Linux path. Darwin path was correct. avalue elements must be pointers TO argument values (`unsafe.Pointer(&cstr)`), not values directly. Reported by @lkmavi on Windows 11 ARM64
+- **CI: examples not verified** — added examples build check to cross-compile CI job. All `examples/*/go.mod` modules are now compiled as part of CI pipeline
+
+## [0.5.4] - 2026-06-15
+
+### Changed
+- **Zero-allocation FFI calls** — added `//go:noescape` to `runtime_cgocall` linkname declarations, eliminating 1 heap allocation (208–248 bytes) per call on all Unix platforms. `syscallArgs` now stays on the goroutine stack. Expected 10–25% performance improvement on the hot path ([#54](https://github.com/go-webgpu/goffi/issues/54))
+- **ABI-safe struct layout** — added `structs.HostLayout` (Go 1.23+) to all 8 assembly-interface structures (`syscallArgs`, `callbackArgs`, `dlopenArgs`, `dlsymArgs`, `dlerrorArgs`, `G`, `ThreadStart`). Guarantees C ABI-compatible memory layout regardless of future Go compiler optimizations ([#55](https://github.com/go-webgpu/goffi/issues/55))
+
+## [0.5.3] - 2026-05-28
+
+### Fixed
+- **FreeBSD ARM64 build failure** — added `freebsd` to build tags in `internal/arch/arm64/call_arm64.go`, `internal/syscall/syscall_arm64.go`, `internal/syscall/syscall_arm64.s`, and `ffi/callback_arm64.s`. FreeBSD ARM64 uses identical AAPCS64 calling convention as Linux ARM64 — no code changes needed, only build tag additions. Requires same `-gcflags="github.com/go-webgpu/goffi/internal/fakecgo=-std"` workaround as FreeBSD AMD64. Closes [#52](https://github.com/go-webgpu/goffi/issues/52)
+- **FreeBSD ARM64 callback trampoline** — `ffi/callback_arm64.s` was missing `freebsd` in build tags while `ffi/callback_arm64.go` (Go side) already included it, causing `NewCallback()` to silently return invalid addresses on FreeBSD ARM64
+
+### Changed
+- Platform count: 7 → 8 targets (added FreeBSD ARM64)
+- CI cross-compilation check now validates all 8 platforms including `freebsd/arm64`
+
 ## [0.5.2] - 2026-05-25
 
 ### Added

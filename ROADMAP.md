@@ -3,7 +3,7 @@
 > **Strategic Approach**: Build production-ready Zero-CGO FFI with benchmarked performance
 > **Philosophy**: Performance first, usability second, platform coverage third
 
-**Last Updated**: 2026-05-25 | **Current Version**: v0.5.2 | **Strategy**: Benchmarks → Callbacks → ARM64 → Runtime → ABI → v1.0 LTS | **Milestone**: v0.5.2 (variadic) → v0.6.0 RegisterFunc/Builder → v1.0.0 LTS
+**Last Updated**: 2026-08-01 | **Current Version**: v0.6.3 | **Strategy**: Benchmarks → Callbacks → ARM64 → Runtime → ABI → v1.0 LTS | **Milestone**: v0.6.3 (HFA checkptr fix) → v0.7.0 RegisterFunc/Builder → v1.0.0 LTS
 
 ---
 
@@ -128,7 +128,7 @@ v1.0.0 LTS → Long-term support release (2027 Q1)
 **v0.5.0** = Platform coverage ✅ RELEASED (2026-03-29)
 - **Windows ARM64** support (Snapdragon X Elite, tested by @SideFx)
 - **FreeBSD amd64** support (cross-compile verified)
-- 7 platform targets (Linux/Windows/macOS/FreeBSD × amd64 + ARM64)
+- 7 platform targets (Linux/Windows/macOS/FreeBSD × amd64 + Linux/macOS/Windows ARM64)
 
 **v0.5.1** = Struct ABI + CGO_ENABLED=1 ✅ RELEASED (2026-05-13)
 - **CGO_ENABLED=1 support** (PR #37 by @jiyeyuran) — dual-mode build, race detector compatible
@@ -141,11 +141,41 @@ v1.0.0 LTS → Long-term support release (2027 Q1)
 
 **v0.5.2** = Variadic functions ✅ RELEASED (2026-05-25)
 - **Variadic function support** — `PrepareVariadicCallInterface` with Apple ARM64 stack-force
-- `go vet` clean — fixed dl_unix.go unsafe.Pointer warnings, syscall_linux_stub.s return signature
-- `cmd/variadic-test` — standalone verification binary for Apple Silicon
-- E2E variadic tests with gcc-compiled C test functions
 
-**v0.6.0** = RegisterFunc + Builder API (2026 Q3)
+**v0.5.3** = FreeBSD ARM64 ✅ RELEASED (2026-05-28)
+- Build tag fix for FreeBSD ARM64 (8 platforms total)
+
+**v0.5.4** = structs.HostLayout ✅ RELEASED (2026-06-15)
+- ABI-safe struct layout for all assembly-interface structures
+
+**v0.5.5** = Example fix + CI ✅ RELEASED (2026-06-15)
+- Example avalue pointer bug fix, CI examples build verification
+
+**v0.5.6** = Callback stack-move fix ✅ RELEASED (2026-07-05)
+- Critical: `syscallArgs` moved to sync.Pool (goroutine stack-move safety)
+- Discovered by @tie — `TestCallbackGrowStack` reproducer
+
+**v0.6.0** = errno always-capture ✅ RELEASED (2026-07-12)
+- **BREAKING**: `CallFunction` returns `(syscall.Errno, error)` — always captures C errno
+- First pure-Go FFI with correct errno capture on Linux
+- Assembly-level capture inside trampoline (thread-safe window)
+- Platform support: `__errno_location` (Linux), `__error` (macOS/FreeBSD)
+
+**v0.6.1** = Android ARM64 + fakecgo cleanup ✅ RELEASED (2026-07-21)
+- **Android ARM64 Bionic** (guarded preview) — PR #62 by @besmpl
+- fakecgo `purego_` → `goffi_` rename + dual copyright — PR #63
+- LICENSE + NOTICE updated to GoGPU ecosystem pattern
+- @besmpl added as CODEOWNER for Android paths
+
+**v0.6.2** = Windows float returns fix ✅ RELEASED (2026-07-22)
+- Windows XMM0 float return capture (TASK-019 resolved) — PR #65 by @besmpl
+
+**v0.6.3** = ARM64 HFA checkptr fix ✅ RELEASED (2026-08-01)
+- ARM64 `handleHFAReturn` checkptr crash fix (#67, reported by @jbunds)
+- ARM64 9-16B struct return proactive fix (copy pattern)
+- Struct pass/return examples and README section (#58)
+
+**v0.7.0** = RegisterFunc + Builder API (2026 Q3-Q4)
 - RegisterFunc convenience API (ADR-008)
 - Library struct + OpenLibraryBytes (ADR-009)
 - NewFunc/Call/CallCtx ergonomic wrappers (ADR-009)
@@ -158,9 +188,9 @@ v1.0.0 LTS → Long-term support release (2027 Q1)
 
 ---
 
-## 📊 Current Status (v0.5.2)
+## 📊 Current Status (v0.6.3)
 
-**Phase**: Variadic functions supported, go vet clean, planning v0.6.0 (RegisterFunc)
+**Phase**: HFA checkptr fix, struct examples. 9 platforms. Planning v0.7.0 (RegisterFunc)
 
 **What Works**:
 - ✅ Dynamic library loading (`LoadLibrary`, `GetSymbol`, `FreeLibrary`)

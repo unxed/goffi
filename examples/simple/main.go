@@ -68,17 +68,19 @@ func main() {
 		args := []unsafe.Pointer{unsafe.Pointer(&cstr)}
 
 		var ret int32
-		if err := ffi.CallFunction(cif, sym, unsafe.Pointer(&ret), args); err != nil {
+		if _, err := ffi.CallFunction(cif, sym, unsafe.Pointer(&ret), args); err != nil {
 			fmt.Println("CallFunction error:", err)
 			return
 		}
 
 	} else {
-		arg := unsafe.Pointer(unsafe.StringData(str))
-		args := []unsafe.Pointer{arg}
+		cstr := unsafe.Pointer(unsafe.StringData(str))
+
+		// IMPORTANT: args contains pointers to argument *storage*
+		args := []unsafe.Pointer{unsafe.Pointer(&cstr)}
 
 		// Execute function call
-		err = ffi.CallFunction(cif, sym, nil, args)
+		_, err = ffi.CallFunction(cif, sym, nil, args)
 		if err != nil {
 			fmt.Println("CallFunction error:", err)
 		}

@@ -11,12 +11,15 @@ import (
 	"github.com/go-webgpu/goffi/types"
 )
 
+// Execute implements arch.FunctionCaller for Windows AMD64.
+// errnoFn is always 0 on Windows (ErrnoFnAddr returns 0); cerrno is always 0.
 func (i *Implementation) Execute(
 	cif *types.CallInterface,
 	fn unsafe.Pointer,
 	rvalue unsafe.Pointer,
 	avalue []unsafe.Pointer,
-) error {
+	errnoFn uintptr,
+) (cerrno uintptr, err error) {
 	// Win64 ABI: arguments are passed in numbered slots.
 	// First 4 args: RCX, RDX, R8, R9 (integer) or XMM0-XMM3 (float).
 	// Args 5+: on the stack.
@@ -68,18 +71,18 @@ func (i *Implementation) Execute(
 	}
 
 	// Call via syscall.SyscallN — handles all args including stack args (5+).
-	ret, _, _ := syscall.SyscallN(uintptr(fn), args...)
+	// On windows/amd64, its second result contains the raw XMM0 bits so callers
+	// can recover scalar floating-point return values.
+	ret, floatRet, _ := syscall.SyscallN(uintptr(fn), args...)
 
 	runtime.KeepAlive(avalue)
 
-	// Handle return value.
-	// Note: float return values in XMM0 are not captured by syscall.SyscallN on Windows.
-	// This is a known limitation: Go's syscall package on Windows only exposes RAX (ret).
-	// Float-returning C functions on Windows require a custom assembly wrapper to capture
-	// XMM0. Since this requires significant additional infrastructure and matches purego's
-	// documented limitation, it is recorded as a known limitation for v0.4.1.
-	// See: TASK-019, GAP-7. Workaround: use integer return type and reinterpret bits.
-	// fret and fret2 are zero: Windows syscall.SyscallN does not capture XMM returns.
-	// Float-returning functions on Windows require a custom assembly wrapper (known limitation).
-	return i.handleReturn(cif, rvalue, uint64(ret), 0, 0, 0)
+	returnBits := ret
+	if cif.ReturnType.Kind == types.FloatType || cif.ReturnType.Kind == types.DoubleType {
+		returnBits = floatRet
+	}
+
+	// cerrno is always 0 on Windows: errno capture via __errno_location is not applicable.
+	// Windows Win32 errors use GetLastError(); CRT errno is rarely used for Win32 APIs.
+	return 0, i.handleReturn(cif, rvalue, uint64(returnBits), 0, 0, 0)
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileCopyrightText: 2026 The Goffi Authors
+// SPDX-FileCopyrightText: 2026 Andrey Kolkov and GoGPU Contributors
 
 //go:build (linux || darwin || freebsd || windows) && (amd64 || arm64)
 
@@ -19,10 +19,15 @@ import (
 var structTestLib unsafe.Pointer
 
 func TestMain(m *testing.M) {
-	if err := buildStructTestLib(); err != nil {
-		// If gcc not available, skip struct e2e tests gracefully.
-		// Other tests still run.
-		structTestLib = nil
+	// Android test binaries run on-device, where invoking a host compiler is
+	// neither meaningful nor available. Keep the pure validation tests active
+	// and let only the host-built shared-library cases skip via requireStructLib.
+	if runtime.GOOS != "android" {
+		if err := buildStructTestLib(); err != nil {
+			// If gcc is not available, skip struct e2e tests gracefully.
+			// Other tests still run.
+			structTestLib = nil
+		}
 	}
 	code := m.Run()
 	if structTestLib != nil {
@@ -108,7 +113,7 @@ func TestStructArg8B_IntegerPair(t *testing.T) {
 	s := Pair{A: 42, B: 19}
 	args := []unsafe.Pointer{unsafe.Pointer(&s)}
 	var result int64
-	if err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
+	if _, err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,7 +158,7 @@ func TestStructArg8B_FloatPair(t *testing.T) {
 	s := PairF32{X: 2.5, Y: 3.5}
 	args := []unsafe.Pointer{unsafe.Pointer(&s)}
 	var result float32
-	if err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
+	if _, err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -194,7 +199,7 @@ func TestStructArg16B(t *testing.T) {
 	s := PairI64{A: 1000000, B: 2000000}
 	args := []unsafe.Pointer{unsafe.Pointer(&s)}
 	var result int64
-	if err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
+	if _, err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,7 +242,7 @@ func TestStructArg24B_MemoryClass(t *testing.T) {
 	s := TripleI64{A: 100, B: 200, C: 300}
 	args := []unsafe.Pointer{unsafe.Pointer(&s)}
 	var result int64
-	if err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
+	if _, err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,7 +284,7 @@ func TestStructArgWithScalar(t *testing.T) {
 	extra := int64(1000)
 	args := []unsafe.Pointer{unsafe.Pointer(&s), unsafe.Pointer(&extra)}
 	var result int64
-	if err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
+	if _, err := CallFunction(&cif, sym, unsafe.Pointer(&result), args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -327,7 +332,7 @@ func TestCallbackStructArg8B_IntegerPair(t *testing.T) {
 		unsafe.Pointer(&callback),
 	}
 
-	if err := CallFunction(&cif, sym, nil, args); err != nil {
+	if _, err := CallFunction(&cif, sym, nil, args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -374,7 +379,7 @@ func TestCallbackStructArg8B_FloatPair(t *testing.T) {
 		unsafe.Pointer(&callback),
 	}
 
-	if err := CallFunction(&cif, sym, nil, args); err != nil {
+	if _, err := CallFunction(&cif, sym, nil, args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -421,7 +426,7 @@ func TestCallbackStructArg16B(t *testing.T) {
 		unsafe.Pointer(&callback),
 	}
 
-	if err := CallFunction(&cif, sym, nil, args); err != nil {
+	if _, err := CallFunction(&cif, sym, nil, args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -471,7 +476,7 @@ func TestCallbackStructArg24B_MemoryClass(t *testing.T) {
 		unsafe.Pointer(&callback),
 	}
 
-	if err := CallFunction(&cif, sym, nil, args); err != nil {
+	if _, err := CallFunction(&cif, sym, nil, args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -523,11 +528,55 @@ func TestCallbackStructArgWithScalar(t *testing.T) {
 		unsafe.Pointer(&callback),
 	}
 
-	if err := CallFunction(&cif, sym, nil, args); err != nil {
+	if _, err := CallFunction(&cif, sym, nil, args); err != nil {
 		t.Fatal(err)
 	}
 
 	if receivedArg1 != expected || receivedArg2 != extra {
 		t.Errorf("expected %#v %d, received %#v %d", expected, extra, receivedArg1, receivedArg2)
+	}
+}
+
+// TestStructReturn24B exercises the sret path for a struct larger than 16 bytes.
+// The caller provides a buffer in rvalue, goffi points the hidden return pointer
+// (RDI on amd64, X8 on arm64) at it, and the callee writes the struct directly
+// into that buffer. This covers the >16B struct return ABI, which the other
+// struct-return tests (all <= 16 bytes) do not reach.
+func TestStructReturn24B(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows struct returns use a separate ABI path (call_windows.go), not covered here")
+	}
+	requireStructLib(t)
+
+	sym, err := GetSymbol(structTestLib, "return_struct_24")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tripleI64 := &types.TypeDescriptor{
+		Kind:      types.StructType,
+		Size:      24,
+		Alignment: 8,
+		Members: []*types.TypeDescriptor{
+			types.SInt64TypeDescriptor,
+			types.SInt64TypeDescriptor,
+			types.SInt64TypeDescriptor,
+		},
+	}
+
+	var cif types.CallInterface
+	if err := PrepareCallInterface(&cif, types.DefaultCall, tripleI64, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	type TripleI64 struct{ A, B, C int64 }
+	var result TripleI64
+	if _, err := CallFunction(&cif, sym, unsafe.Pointer(&result), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	want := TripleI64{11, 22, 33}
+	if result != want {
+		t.Fatalf("return_struct_24() = %+v, want %+v", result, want)
 	}
 }
