@@ -31,7 +31,7 @@ readelf="$toolchain/llvm-readelf"
 # lines, or when any audited source invariant changes.
 go_version=$(go env GOVERSION)
 case "$go_version" in
-	go1.26.5|go1.26.6|go1.26.7) ;;
+	go1.25.12|go1.26.5|go1.26.6|go1.26.7) ;;
 	*)
 		echo "unsupported Go runtime source for Android fakecgo: $go_version" >&2
 		echo "audit the new runtime/cgo Android arm64 startup ABI before extending this gate" >&2
