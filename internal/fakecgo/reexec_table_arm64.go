@@ -17,6 +17,7 @@ const (
 	sysReadlinkat  = 78
 	sysOpenat      = 56
 	sysFaccessat   = 48
+	sysGetpid      = 172
 	sysMemfdCreate = 279
 )
 
