@@ -84,6 +84,14 @@ const (
 	guardVar = "GOFFI_UNIVERSAL_REEXEC=1"
 	guardKey = "GOFFI_UNIVERSAL_REEXEC="
 
+	// What the re-exec destroys, recorded before it happens. Both values are
+	// prefixed with the pid they describe, because the environment they live
+	// in is inherited by every child: the pid survives execve, so the process
+	// the bridge re-execed still matches, and a child (a new pid) does not.
+	// ffi.Executable and ffi.Argv0 read these; see ffi/selfinfo.go.
+	exeKey   = "GOFFI_UNIVERSAL_EXE="
+	argv0Key = "GOFFI_UNIVERSAL_ARGV0="
+
 	// interp restore (glibc path)
 	mfdExec   = 0x0010 // MFD_EXEC (kernel 6.3+); fall back to 0 on older kernels
 	ptNull    = 0      // PT_NULL  (what the interp header was stripped to)
@@ -126,6 +134,56 @@ func cstr(s string) *byte {
 	*(*byte)(unsafe.Add(unsafe.Pointer(strBufBase), start+n)) = 0
 	strBufOff = start + n + 1
 	return (*byte)(unsafe.Add(unsafe.Pointer(strBufBase), start))
+}
+
+// taggedEnv builds "<key><pid>:<val>" NUL-terminated in the staging buffer and
+// returns a *byte to it, or nil if val is nil or the buffer is exhausted. val
+// is a NUL-terminated C string; its NUL is not copied.
+//
+//go:nosplit
+func taggedEnv(key string, pid uintptr, val *byte) *byte {
+	if val == nil || strBufBase == 0 {
+		return nil
+	}
+	var digs [20]byte
+	di := len(digs)
+	if pid == 0 {
+		di--
+		digs[di] = '0'
+	}
+	for v := pid; v > 0; v /= 10 {
+		di--
+		digs[di] = byte('0' + v%10)
+	}
+	var valLen uintptr
+	for *(*byte)(unsafe.Add(unsafe.Pointer(val), valLen)) != 0 {
+		valLen++
+	}
+	kn := uintptr(len(key))
+	dn := uintptr(len(digs) - di)
+	if strBufOff+kn+dn+1+valLen+1 > strBufCap {
+		return nil
+	}
+	base := unsafe.Pointer(strBufBase)
+	start := strBufOff
+	off := start
+	for i := uintptr(0); i < kn; i++ {
+		*(*byte)(unsafe.Add(base, off)) = key[i]
+		off++
+	}
+	for i := uintptr(0); i < dn; i++ {
+		*(*byte)(unsafe.Add(base, off)) = digs[di+int(i)]
+		off++
+	}
+	*(*byte)(unsafe.Add(base, off)) = ':'
+	off++
+	for i := uintptr(0); i < valLen; i++ {
+		*(*byte)(unsafe.Add(base, off)) = *(*byte)(unsafe.Add(unsafe.Pointer(val), i))
+		off++
+	}
+	*(*byte)(unsafe.Add(base, off)) = 0
+	strBufOff = off + 1
+	return (*byte)(unsafe.Add(base, start))
 }
 
 //go:nosplit
@@ -400,9 +458,12 @@ func reexecUniversal() bool {
 		return false
 	}
 
-	// Resolve our own executable path for the loader to run.
+	// Resolve our own executable path for the loader to run. realExeC keeps
+	// that answer even when exeC is replaced by the memfd path below: it is
+	// the last moment at which the on-disk location of this binary is
+	// knowable, and it is recorded in the environment further down.
 	exeBase := mmapAnon(exeBufCap)
-	var exeC *byte
+	var exeC, realExeC *byte
 	if exeBase != nil {
 		n := rawsyscall6(sysReadlinkat, atFDCWD,
 			uintptr(unsafe.Pointer(cstr("/proc/self/exe"))),
@@ -410,6 +471,7 @@ func reexecUniversal() bool {
 		if !sysErr(n) && n != 0 {
 			*(*byte)(unsafe.Add(exeBase, n)) = 0
 			exeC = (*byte)(exeBase)
+			realExeC = exeC
 		}
 	}
 	if exeC == nil {
@@ -480,8 +542,9 @@ func reexecUniversal() bool {
 	setPtr(argvBase, ai, 0) // NULL-terminate argv
 
 	// Build envp: <existing environ...> + guard, NULL-terminated.
+	// -4: room for the guard, the two recorded variables below, and the NULL.
 	ei := 0
-	for off := 0; off < envLen && ei < ptrArrCap-2; {
+	for off := 0; off < envLen && ei < ptrArrCap-4; {
 		setPtr(envpBase, ei, uintptr(unsafe.Add(envBase, off)))
 		ei++
 		for off < envLen && *(*byte)(unsafe.Add(envBase, off)) != 0 {
@@ -492,6 +555,31 @@ func reexecUniversal() bool {
 	if g := cstr(guardVar); g != nil {
 		setPtr(envpBase, ei, uintptr(unsafe.Pointer(g)))
 		ei++
+	}
+	// Hand the re-executed process what the re-exec is about to take from it.
+	// After the execve, /proc/self/exe is the loader and argv[0] is whatever
+	// the loader was told to run -- on glibc a memfd, which names no file at
+	// all -- so os.Executable() and os.Args[0] can no longer answer "where am
+	// I installed" or "what was I invoked as". Nothing else in the process
+	// knows either: this is the only point where both are still true.
+	//
+	// cmdBase[0] is the original argv[0] (NUL-terminated in place), realExeC
+	// the readlink of /proc/self/exe taken above. Either may be absent -- an
+	// empty /proc/self/cmdline, a readlink that failed -- and a missing
+	// variable is a better answer than a guessed one, so each is recorded
+	// only when it is real.
+	pid := rawsyscall6(sysGetpid, 0, 0, 0, 0, 0, 0)
+	if realExeC != nil && ei < ptrArrCap-2 {
+		if v := taggedEnv(exeKey, pid, realExeC); v != nil {
+			setPtr(envpBase, ei, uintptr(unsafe.Pointer(v)))
+			ei++
+		}
+	}
+	if cmdLen > 0 && *(*byte)(cmdBase) != 0 && ei < ptrArrCap-2 {
+		if v := taggedEnv(argv0Key, pid, (*byte)(cmdBase)); v != nil {
+			setPtr(envpBase, ei, uintptr(unsafe.Pointer(v)))
+			ei++
+		}
 	}
 	setPtr(envpBase, ei, 0) // NULL-terminate envp
 

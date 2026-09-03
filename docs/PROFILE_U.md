@@ -49,7 +49,20 @@ ffi.LibcKind()   // "glibc" | "musl" | "unknown"
   reports false, and `LoadLibrary`, `GetSymbol` and `CallFunction` return
   `ffi.ErrNoHostLibc` rather than jumping to an unbound symbol. Branch on
   `ffi.Available()` at startup if there is a pure-Go fallback to pick.
-- After the re-exec, `argv[0]` becomes the resolved executable path.
+- After the re-exec, `argv[0]` is the image the loader was handed: the resolved
+  executable path on musl, and on glibc the `/proc/self/fd/<n>` memfd copy with
+  the interpreter header restored. `/proc/self/exe` — and therefore
+  `os.Executable` — names the loader. Both are recorded before the re-exec and
+  can be read back:
+
+  ```go
+  ffi.Executable() // where this binary lives on disk
+  ffi.Argv0()      // what it was invoked as
+  ```
+
+  A program that re-runs, updates or installs itself, or that looks for files
+  beside its own binary, wants those rather than `os` — see "Starting another
+  copy of yourself" below.
 - The universal build **owns the cgo runtime**; do not combine it with purego's
   fakecgo. To run goffi alongside purego, use the default build with
   `-tags nofakecgo` (see `docs/MUSL.md` and the CI `purego-coexistence` job).
@@ -64,6 +77,26 @@ ffi.LibcKind()   // "glibc" | "musl" | "unknown"
   own**, so it needs no build tags and works unchanged in universal mode. No
   pureffi change is required for Profile U — this branch only *adds* public API
   (`HostLoader`/`HostLibC`/`LibcKind`) and build-tag-gated files.
+
+## Starting another copy of yourself
+
+`GOFFI_UNIVERSAL_REEXEC` is inherited, and the bridge honours it: a child that
+inherits it concludes it already came through the loader and binds no libc.
+Under `exec.Command(os.Args[0], ...)` — or any other plain respawn — the child
+therefore dies before `main`, as `symbol lookup error: undefined symbol: malloc`
+on glibc, or as a jump to an unbound symbol on musl.
+
+Start the copy the way the bridge would have:
+
+```go
+exec.Command(ffi.HostLoader(), append(
+    []string{"--preload", ffi.HostLibC(), os.Args[0]}, args...)...)
+```
+
+`os.Args[0]`, not `ffi.Executable()`: the loader has to be handed the image this
+process was loaded from, which on glibc is the memfd and not the file on disk.
+The loader shifts `argv` as usual, so the child sees the image as its `argv[0]`
+and its own arguments from `argv[1]`.
 
 ## Attribution
 
