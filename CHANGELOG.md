@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **FreeBSD amd64: callbacks pointed into a data page** — `ffi/callback_amd64.s` carried `(linux || darwin) && amd64` while `ffi/callback.go` carried `(linux || darwin || freebsd) && amd64`, so on freebsd/amd64 the assembly trampoline table was never built and the `//go:linkname` placeholder variable became `ffi.callbackTrampoline`. The build succeeded, but `NewCallback` returned addresses in the data segment (`go tool nm`: `D`, not `T`). The assembly now builds on FreeBSD too.
+- CI: `scripts/check-callback-trampolines.sh` links a consumer for every asm-trampoline target (linux, darwin, freebsd × amd64, arm64) and fails unless `ffi.callbackTrampoline` is a text symbol.
+
 ## [0.6.4] - 2026-09-10
 
 ### Added
