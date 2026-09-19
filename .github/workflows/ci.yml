@@ -184,6 +184,15 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action answers a fixed number of license prompts and fails
+          # when cmdline-tools 16 asks for more (six licenses now, the Google
+          # TV, XR and SDK Preview ones among them). The next step accepts
+          # every license with `yes`, which does not depend on the count, so
+          # leave that to it and skip the default packages, which cannot be
+          # installed before the licenses are accepted.
+          accept-android-sdk-licenses: false
+          packages: ''
 
       - name: Install Android NDK r29
         shell: bash
