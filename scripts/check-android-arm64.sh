@@ -30,8 +30,10 @@ readelf="$toolchain/llvm-readelf"
 # runtime. Fail closed when the selected toolchain is outside the audited
 # lines, or when any audited source invariant changes.
 go_version=$(go env GOVERSION)
+# go1.26.8 was audited by comparing asm_arm64.s, tls_arm64.s and
+# cgo/gcc_android.c with go1.26.7's: all three are byte-identical.
 case "$go_version" in
-	go1.25.12|go1.26.5|go1.26.6|go1.26.7) ;;
+	go1.25.12|go1.26.5|go1.26.6|go1.26.7|go1.26.8) ;;
 	*)
 		echo "unsupported Go runtime source for Android fakecgo: $go_version" >&2
 		echo "audit the new runtime/cgo Android arm64 startup ABI before extending this gate" >&2
