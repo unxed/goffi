@@ -78,6 +78,27 @@ ffi.LibcKind()   // "glibc" | "musl" | "unknown"
   pureffi change is required for Profile U — this branch only *adds* public API
   (`HostLoader`/`HostLibC`/`LibcKind`) and build-tag-gated files.
 
+## Hosts that preload a library
+
+A library named in `/etc/ld.so.preload`, or in `LD_PRELOAD`, is initialised in
+every process the host loader starts -- including the re-executed one. If its
+constructor aborts there (ESET's `libesets_pac.so` does on some hosts, f4
+#1213), the process dies before `main`: it is the re-executed process, not the
+one that could still have chosen to go on without FFI.
+
+So when either is non-empty, the bridge first starts the same launch -- same
+loader, libc, image and environment -- in a forked child, with
+`GOFFI_UNIVERSAL_PROBE=1` added. That child stops as soon as it reaches the
+bridge, so nothing of the program runs. If it exits 0 the real re-exec goes
+ahead; if it was killed or failed, the bridge says so once on stderr and
+continues without FFI, exactly as on a host with no known loader
+(`ffi.Available()` is false). A probe that cannot be carried out at all (fork
+refused, no scratch memory) is not held against the launch. With nothing
+preloaded there is no probe and no cost.
+
+The probe variable is set only in the child's environment; the running process
+never sees it.
+
 ## Starting another copy of yourself
 
 `GOFFI_UNIVERSAL_REEXEC` is inherited, and the bridge honours it: a child that

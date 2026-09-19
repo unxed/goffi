@@ -19,6 +19,9 @@ const (
 	sysFaccessat   = 269
 	sysGetpid      = 39
 	sysMemfdCreate = 319
+	sysClone       = 56
+	sysWait4       = 61
+	sysExitGroup   = 231
 )
 
 // Host dynamic loader + libc SONAME, per libc flavor, for amd64. These are the

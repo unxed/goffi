@@ -19,6 +19,9 @@ const (
 	sysFaccessat   = 48
 	sysGetpid      = 172
 	sysMemfdCreate = 279
+	sysClone       = 220
+	sysWait4       = 260
+	sysExitGroup   = 94
 )
 
 // Host dynamic loader + libc SONAME, per libc flavor, for arm64.

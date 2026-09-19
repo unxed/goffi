@@ -84,6 +84,16 @@ const (
 	guardVar = "GOFFI_UNIVERSAL_REEXEC=1"
 	guardKey = "GOFFI_UNIVERSAL_REEXEC="
 
+	// The probe: see probeHostLoader. probeVar is set only in the environment
+	// of the throwaway child, never in the process that goes on to run.
+	probeVar     = "GOFFI_UNIVERSAL_PROBE=1"
+	probeKey     = "GOFFI_UNIVERSAL_PROBE="
+	ldPreloadKey = "LD_PRELOAD="
+	preloadFile  = "/etc/ld.so.preload"
+	preloadCap   = 4 << 10
+	sigchld      = 17
+	eintr        = 4
+
 	// What the re-exec destroys, recorded before it happens. Both values are
 	// prefixed with the pid they describe, because the environment they live
 	// in is inherited by every child: the pid survives execve, so the process
@@ -386,6 +396,80 @@ func copyExeToMemfd(exeFd, memfd uintptr, buf unsafe.Pointer) bool {
 	}
 }
 
+// needsPreloadProbe reports whether something is preloaded into processes the
+// host loader starts: a non-empty LD_PRELOAD in the environment, or a
+// non-empty /etc/ld.so.preload. Neither is there on most hosts, and the probe
+// costs a process start, so it is only paid where it can matter.
+//
+//go:nosplit
+func needsPreloadProbe(envBase unsafe.Pointer, envLen int) bool {
+	for off := 0; off < envLen; {
+		if matchAt(envBase, off, envLen, ldPreloadKey) {
+			v := off + len(ldPreloadKey)
+			if v < envLen && *(*byte)(unsafe.Add(envBase, v)) != 0 {
+				return true
+			}
+		}
+		for off < envLen && *(*byte)(unsafe.Add(envBase, off)) != 0 {
+			off++
+		}
+		off++ // skip NUL
+	}
+	buf := mmapAnon(preloadCap)
+	if buf == nil {
+		return false
+	}
+	return readAll(cstr(preloadFile), buf, preloadCap) > 0
+}
+
+// probeHostLoader starts the very launch the bridge is about to make -- same
+// loader, same libc, same image, same environment -- in a forked child, with
+// the probe variable added, and reports whether that child got as far as the
+// bridge. It did if it exited 0; a child that died of a signal or exited with
+// anything else was killed on the way, by the loader or by a constructor of a
+// library preloaded next to the libc.
+//
+// The child stops as soon as it is the re-executed process (see the guard in
+// reexecUniversal), so the probe costs one loader start and does not run any
+// of the program. A probe that cannot be carried out at all -- no scratch
+// memory, fork refused, wait failed -- says nothing about the launch, so it
+// reports success and leaves the real one to happen as it always did.
+//
+// envpBase holds ei entries; the child's copy of it takes one more.
+//
+//go:nosplit
+func probeHostLoader(loaderC *byte, argvBase, envpBase unsafe.Pointer, ei int) bool {
+	probe := cstr(probeVar)
+	status := mmapAnon(4096)
+	if probe == nil || status == nil || ei+1 >= ptrArrCap {
+		return true
+	}
+	// clone with only SIGCHLD and no new stack is fork(2), and exists on both
+	// architectures, where fork(2) itself does not on arm64.
+	pid := rawsyscall6(sysClone, sigchld, 0, 0, 0, 0, 0)
+	if sysErr(pid) {
+		return true
+	}
+	if pid == 0 {
+		// In the child. It has its own copy of everything, so the probe
+		// variable never reaches the parent's environment.
+		setPtr(envpBase, ei, uintptr(unsafe.Pointer(probe)))
+		setPtr(envpBase, ei+1, 0)
+		rawsyscall6(sysExecve, uintptr(unsafe.Pointer(loaderC)), uintptr(argvBase), uintptr(envpBase), 0, 0, 0)
+		rawsyscall6(sysExitGroup, 127, 0, 0, 0, 0, 0)
+	}
+	for {
+		r := rawsyscall6(sysWait4, pid, uintptr(status), 0, 0, 0, 0)
+		if !sysErr(r) {
+			break
+		}
+		if 0-r != eintr {
+			return true
+		}
+	}
+	return *(*uint32)(status) == 0
+}
+
 // maybeReexecUniversal is invoked at the very top of x_cgo_init. On the first
 // launch of a universal binary it re-execs through the host loader with libc
 // pre-loaded; on the re-executed launch (guard present) it returns immediately.
@@ -430,15 +514,29 @@ func reexecUniversal() bool {
 		return false
 	}
 
-	// Guard: if we already re-executed, do nothing.
+	// Guard: if we already re-executed, do nothing. The probe child (see
+	// probeHostLoader) has come through the host loader too, and that is all it
+	// was asked to prove: it has reached this point, so the loader mapped the
+	// libc and every library preloaded next to it initialised. It stops here,
+	// before the Go runtime does anything else.
+	guarded, probing := false, false
 	for off := 0; off < envLen; {
 		if matchAt(envBase, off, envLen, guardKey) {
-			return true
+			guarded = true
+		}
+		if matchAt(envBase, off, envLen, probeKey) {
+			probing = true
 		}
 		for off < envLen && *(*byte)(unsafe.Add(envBase, off)) != 0 {
 			off++
 		}
 		off++ // skip NUL
+	}
+	if guarded {
+		if probing {
+			rawsyscall6(sysExitGroup, 0, 0, 0, 0, 0, 0)
+		}
+		return true
 	}
 
 	// Pick the host loader + libc SONAME by probing known loader paths.
@@ -582,6 +680,15 @@ func reexecUniversal() bool {
 		}
 	}
 	setPtr(envpBase, ei, 0) // NULL-terminate envp
+
+	// A library preloaded into every process can fail to initialise in the
+	// re-executed one, and a constructor that aborts kills it before main:
+	// there is no process left to notice, and none that could still go on
+	// without FFI (f4 #1213). So where something is preloaded, find out first.
+	if needsPreloadProbe(envBase, envLen) && !probeHostLoader(loaderC, argvBase, envpBase, ei) {
+		diag("goffi: universal build: the host loader could not start this binary (a library preloaded through /etc/ld.so.preload or LD_PRELOAD probably failed to initialise); continuing without FFI\n")
+		return false
+	}
 
 	rawsyscall6(sysExecve,
 		uintptr(unsafe.Pointer(loaderC)),

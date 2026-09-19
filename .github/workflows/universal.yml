@@ -66,6 +66,74 @@ jobs:
           ./universal-probe | tee out.txt
           grep -q UNIVERSAL-PROBE-OK out.txt
 
+  preload-failure:
+    name: a preloaded library that aborts (f4 #1213)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Build a universal binary that reports whether FFI is available
+        run: |
+          set -euo pipefail
+          bash scripts/build-universal.sh -o universal-available ./cmd/universal-available
+      - name: Build a preloadable library that aborts only in the re-executed process
+        run: |
+          set -euo pipefail
+          # ESET's libesets_pac.so, preloaded into every process through
+          # /etc/ld.so.preload, aborts in its constructor when the universal
+          # binary is re-executed through the host loader (f4 #1213). This
+          # library does the same for exactly that launch -- a loader started
+          # with --preload and an image named /proc/self/fd/N -- and leaves
+          # every other process alone.
+          cat > abort.c <<'C'
+          #include <fcntl.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <unistd.h>
+          __attribute__((constructor)) static void init(void) {
+              char buf[4096];
+              int fd = open("/proc/self/cmdline", O_RDONLY);
+              if (fd < 0) return;
+              ssize_t n = read(fd, buf, sizeof buf - 1);
+              close(fd);
+              if (n <= 0) return;
+              for (ssize_t i = 0; i < n; i++) if (buf[i] == 0) buf[i] = ' ';
+              buf[n] = 0;
+              if (strstr(buf, "--preload") && strstr(buf, " /proc/self/fd/")) abort();
+          }
+          C
+          echo 'static int unused;' > noop.c
+          sudo gcc -shared -fPIC -o /usr/local/lib/libabort.so abort.c
+          sudo gcc -shared -fPIC -o /usr/local/lib/libnoop.so noop.c
+      - name: Nothing preloaded, the bridge is unchanged
+        run: |
+          set -eu
+          ./universal-available | tee out.txt
+          grep -q 'ffi.Available = true' out.txt
+      - name: A harmless LD_PRELOAD still gets FFI
+        run: |
+          set -eu
+          LD_PRELOAD=/usr/local/lib/libnoop.so ./universal-available | tee out.txt
+          grep -q 'ffi.Available = true' out.txt
+      - name: An aborting LD_PRELOAD library falls back to no FFI
+        run: |
+          set -eu
+          LD_PRELOAD=/usr/local/lib/libabort.so ./universal-available 2>err.txt | tee out.txt
+          cat err.txt
+          grep -q 'ffi.Available = false' out.txt
+          grep -q 'continuing without FFI' err.txt
+      - name: An aborting /etc/ld.so.preload library falls back to no FFI
+        run: |
+          set -eu
+          echo /usr/local/lib/libabort.so | sudo tee /etc/ld.so.preload
+          trap 'sudo rm -f /etc/ld.so.preload' EXIT
+          ./universal-available 2>err.txt | tee out.txt
+          cat err.txt
+          grep -q 'ffi.Available = false' out.txt
+          grep -q 'continuing without FFI' err.txt
+
   run-musl:
     name: run on musl (alpine)
     needs: build

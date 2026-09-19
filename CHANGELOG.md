@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A universal binary no longer dies before `main` when a preloaded library
+  aborts in the re-executed process** (f4 #1213). A library named in
+  `/etc/ld.so.preload` (ESET's `libesets_pac.so`) is initialised in every process
+  the host loader starts, and an abort in its constructor killed the process the
+  bridge had re-execed -- the one that could no longer choose to run without FFI.
+  Where `LD_PRELOAD` or `/etc/ld.so.preload` is non-empty, the bridge now first
+  starts the same launch in a forked child that stops as soon as it reaches the
+  bridge, and continues without FFI (`ffi.Available()` is false) when that child
+  did not exit cleanly. Hosts with nothing preloaded pay nothing.
+
 ### Added
 - **NetBSD amd64/arm64 support** — full FFI tier: `LoadLibrary`, `CallFunction`
   and `NewCallback`. NetBSD keeps the `dlopen` family in `libc.so` (like
