@@ -112,17 +112,20 @@ jobs:
           set -eu
           ./universal-available | tee out.txt
           grep -q 'ffi.Available = true' out.txt
+          grep -q 'workload = ok' out.txt
       - name: A harmless LD_PRELOAD still gets FFI
         run: |
           set -eu
           LD_PRELOAD=/usr/local/lib/libnoop.so ./universal-available | tee out.txt
           grep -q 'ffi.Available = true' out.txt
+          grep -q 'workload = ok' out.txt
       - name: An aborting LD_PRELOAD library falls back to no FFI
         run: |
           set -eu
           LD_PRELOAD=/usr/local/lib/libabort.so ./universal-available 2>err.txt | tee out.txt
           cat err.txt
           grep -q 'ffi.Available = false' out.txt
+          grep -q 'workload = ok' out.txt
           grep -q 'continuing without FFI' err.txt
       - name: An aborting /etc/ld.so.preload library falls back to no FFI
         run: |
@@ -132,6 +135,7 @@ jobs:
           ./universal-available 2>err.txt | tee out.txt
           cat err.txt
           grep -q 'ffi.Available = false' out.txt
+          grep -q 'workload = ok' out.txt
           grep -q 'continuing without FFI' err.txt
 
   run-musl:
