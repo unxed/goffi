@@ -96,6 +96,7 @@ func x_cgo_init(g *G, setg uintptr) {
 		// pthread_attr_getstacksize refinement below is exactly what a
 		// CGO_ENABLED=0 binary does without, so nothing is lost.
 		_iscgo = false
+			dropLibcEnvHooks()
 		setg_func = setg
 		return
 	}

@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts the same launch in a forked child that stops as soon as it reaches the
   bridge, and continues without FFI (`ffi.Available()` is false) when that child
   did not exit cleanly. Hosts with nothing preloaded pay nothing.
+- **A process without a libc no longer dies on its first `os.Setenv`** (f4
+  #1213, second half). The fallback above, and the older one for hosts with no
+  known loader, left `_cgo_setenv` and `_cgo_unsetenv` pointing at trampolines
+  into libc's `setenv`. The runtime asks only whether those hooks are set, not
+  whether the process is cgo, so `os.Setenv` jumped to an unbound symbol
+  (`SIGSEGV`, `PC=0x0`, in `x_cgo_setenv`). The hooks are now cleared when no
+  libc could be reached. `cmd/universal-available` exercises Setenv, new
+  threads and GC, and the `preload-failure` CI job requires it to succeed.
 
 ### Added
 - **NetBSD amd64/arm64 support** — full FFI tier: `LoadLibrary`, `CallFunction`
