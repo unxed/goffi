@@ -94,7 +94,8 @@ const (
 
 	// The probe: see probeHostLoader. "GOFFI_UNIVERSAL_PROBE=<pid>:1", set
 	// only in the environment of the throwaway child, never in the process
-	// that goes on to run.
+	// that goes on to run. pid is the bridge process that forked the probe,
+	// which is the probe's parent: the probe matches it against getppid.
 	probeKey     = "GOFFI_UNIVERSAL_PROBE="
 	ldPreloadKey = "LD_PRELOAD="
 	preloadFile  = "/etc/ld.so.preload"
@@ -553,10 +554,9 @@ func needsPreloadProbe(envBase unsafe.Pointer, envLen int) bool {
 // envpBase holds ei entries; the child's copy of it takes one more.
 //
 //go:nosplit
-func probeHostLoader(loaderC *byte, argvBase, envpBase unsafe.Pointer, ei int) bool {
-	one := cstr("1")
+func probeHostLoader(loaderC *byte, argvBase, envpBase unsafe.Pointer, ei int, probe *byte) bool {
 	status := mmapAnon(4096)
-	if one == nil || status == nil || ei+1 >= ptrArrCap {
+	if probe == nil || status == nil || ei+1 >= ptrArrCap {
 		return true
 	}
 	// clone with only SIGCHLD and no new stack is fork(2), and exists on both
@@ -567,12 +567,7 @@ func probeHostLoader(loaderC *byte, argvBase, envpBase unsafe.Pointer, ei int) b
 	}
 	if pid == 0 {
 		// In the child. It has its own copy of everything, so the probe
-		// variable never reaches the parent's environment. It is tagged with
-		// the child's own pid, which the execve below keeps.
-		probe := taggedEnv(probeKey, rawsyscall6(sysGetpid, 0, 0, 0, 0, 0, 0), one)
-		if probe == nil {
-			rawsyscall6(sysExitGroup, 0, 0, 0, 0, 0, 0)
-		}
+		// variable never reaches the parent's environment.
 		setPtr(envpBase, ei, uintptr(unsafe.Pointer(probe)))
 		setPtr(envpBase, ei+1, 0)
 		rawsyscall6(sysExecve, uintptr(unsafe.Pointer(loaderC)), uintptr(argvBase), uintptr(envpBase), 0, 0, 0)
@@ -640,7 +635,8 @@ func reexecUniversal() bool {
 	// libc and every library preloaded next to it initialised. It stops here,
 	// before the Go runtime does anything else.
 	//
-	// Both variables count only when tagged with this process's pid. An
+	// The guard counts only when tagged with this process's pid, the probe
+	// only when tagged with its parent's (the bridge that forked it). An
 	// inherited guard describes the parent: this process was started some
 	// other way (exec.Command(os.Args[0]) and the like) and still needs the
 	// bridge. parentExe is the parent's recorded executable, used below when
@@ -653,7 +649,7 @@ func reexecUniversal() bool {
 		if taggedAt(envBase, off, envLen, guardKey, pid) >= 0 {
 			guarded = true
 		}
-		if taggedAt(envBase, off, envLen, probeKey, pid) >= 0 {
+		if taggedAt(envBase, off, envLen, probeKey, ppid) >= 0 {
 			probing = true
 		}
 		if v := taggedAt(envBase, off, envLen, exeKey, ppid); v >= 0 {
@@ -837,7 +833,8 @@ func reexecUniversal() bool {
 	// re-executed one, and a constructor that aborts kills it before main:
 	// there is no process left to notice, and none that could still go on
 	// without FFI (f4 #1213). So where something is preloaded, find out first.
-	if needsPreloadProbe(envBase, envLen) && !probeHostLoader(loaderC, argvBase, envpBase, ei) {
+	if needsPreloadProbe(envBase, envLen) &&
+		!probeHostLoader(loaderC, argvBase, envpBase, ei, taggedEnv(probeKey, pid, cstr("1"))) {
 		diag("goffi: universal build: the host loader could not start this binary (a library preloaded through /etc/ld.so.preload or LD_PRELOAD probably failed to initialise); continuing without FFI\n")
 		return false
 	}
