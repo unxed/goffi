@@ -83,6 +83,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - CI: the hand-rolled `cross-compile` job is replaced by `platform-matrix`,
   which runs `scripts/check-platforms.sh`.
+- **Docs: avalue double indirection** — `avalue[i]` is a pointer to the
+  argument value, so an out-pointer parameter needs an intermediate variable.
+  Documented in the `ffi` package doc, README and `docs/ARCHITECTURE.md`, with
+  the wrong and the right form side by side. Ported from upstream
+  ([#79](https://github.com/go-webgpu/goffi/issues/79),
+  [PR #80](https://github.com/go-webgpu/goffi/pull/80)). The package doc's stale
+  platform list now follows `docs/PLATFORMS.md`.
 
 ## [0.6.3] - 2026-08-01
 
