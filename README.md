@@ -81,6 +81,7 @@ CGO_ENABLED=1 go build ./...
 | **Dynamic FFI** (default) | `CGO_ENABLED=0 go build` | dynamic + `libdl`/`libc` | yes | desktop GPU/GUI |
 | **Musl dynamic** | `CGO_ENABLED=0 go build -tags goffi_musl -gcflags=github.com/go-webgpu/goffi/internal/dl=-std` | dynamic vs musl (`/lib/ld-musl-<arch>.so.1`, `libc.musl-<arch>.so.1`) | yes | Alpine containers with GPU/GUI |
 | **Static no-FFI** | `CGO_ENABLED=0 go build -tags goffi_static` | fully static (no `PT_INTERP`, no `NEEDED`) | no (`errors.Is(err, ffi.ErrStaticBuild)`) | `FROM scratch`, air-gapped CLI |
+| **Universal** | `scripts/build-universal.sh` (`-tags goffi_universal`) | no `PT_INTERP`, no `NEEDED`; re-execs through the host loader | yes, on glibc and musl hosts (`ffi.Available()`) | one binary for every Linux distro ([docs/PROFILE_U.md](docs/PROFILE_U.md)) |
 
 ```bash
 # Fully static Linux amd64/arm64 binary (FFI unavailable)
@@ -92,7 +93,7 @@ scripts/check-elf-linking.sh --static ./app
 
 Under `-tags goffi_static`, errno capture is unavailable (always returns 0): `ErrnoFnAddr()` is a no-op so the assembly trampoline skips `__errno_location` / `__error`, which need dynamic libc.
 
-A default binary does not start on Alpine: its `PT_INTERP` and `DT_NEEDED` name the glibc loader and SONAMEs. `-tags goffi_musl` (linux/amd64 and linux/arm64) names the musl ones instead; FFI stays fully available. See [docs/MUSL.md](docs/MUSL.md).
+A default binary does not start on Alpine: its `PT_INTERP` and `DT_NEEDED` name the glibc loader and SONAMEs. `-tags goffi_musl` (linux/amd64 and linux/arm64) names the musl ones instead; FFI stays fully available. See [docs/MUSL.md](docs/MUSL.md). To ship one binary for both libcs, use the universal build instead: [docs/PROFILE_U.md](docs/PROFILE_U.md).
 
 `FROM scratch` + Vulkan/Wayland/libX11 via host `dlopen` is not possible without either `ld.so` or a userspace ELF loader (see [docs/ADR-001-userspace-elf-loader.md](docs/ADR-001-userspace-elf-loader.md)). Windows is unaffected (`LoadLibraryW` via ntdll).
 
