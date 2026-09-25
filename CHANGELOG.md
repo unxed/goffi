@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A universal binary can start another copy of itself the plain way.** The
+  re-exec guard `GOFFI_UNIVERSAL_REEXEC` was `1`, and every child inherited it,
+  so a child started with `exec.Command(os.Args[0])` believed it had already
+  come through the host loader, bound no libc, and died before `main`. The
+  guard is now `<pid>:1`, tagged like `GOFFI_UNIVERSAL_EXE`/`GOFFI_UNIVERSAL_ARGV0`,
+  and a child (a new pid) runs the bridge itself. A child started from the
+  parent's memfd image (`os.Args[0]` on glibc) or by the host loader by hand
+  also works, and `ffi.Executable()` names the file on disk in all of them.
+  The probe variable is pid-tagged the same way. `cmd/universal-respawn`
+  checks all of this on glibc and musl in CI.
+
+### Fixed
 - **A universal binary starts on glibc older than 2.34** (f4 #1381). The bridge
   re-execed through the host loader with `--preload libc.so.6` only, but before
   2.34 glibc keeps `pthread_create`, `pthread_attr_getstacksize` and the rest of

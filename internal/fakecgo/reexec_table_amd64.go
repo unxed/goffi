@@ -18,6 +18,7 @@ const (
 	sysOpenat      = 257
 	sysFaccessat   = 269
 	sysGetpid      = 39
+	sysGetppid     = 110
 	sysMemfdCreate = 319
 	sysClone       = 56
 	sysWait4       = 61

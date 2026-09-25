@@ -84,7 +84,8 @@ func mustCIF(ret *types.TypeDescriptor, args ...*types.TypeDescriptor) *types.Ca
 }
 
 func main() {
-	reexeced := os.Getenv("GOFFI_UNIVERSAL_REEXEC") == "1"
+	// The guard is "<pid>:1", written for the process the bridge re-execed.
+	reexeced := os.Getenv("GOFFI_UNIVERSAL_REEXEC") == fmt.Sprintf("%d:1", os.Getpid())
 	fmt.Printf("info re-exec bridge active: %v\n", reexeced)
 
 	lib := hostLibc()

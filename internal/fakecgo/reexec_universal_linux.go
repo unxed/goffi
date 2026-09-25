@@ -24,7 +24,9 @@
 // from whichever libc the host actually ships (glibc's libc.so.6 -- with
 // libpthread.so.0 and libdl.so.2, see glibcPreloadExtra -- or musl's
 // libc.musl-<arch>.so.1). A guard variable in the environment stops the second
-// launch from re-execing again.
+// launch from re-execing again. The guard names the pid it was written for, so
+// a child the program starts later (a new pid) does not mistake its parent's
+// guard for its own and runs the bridge itself.
 //
 // Everything here runs before libc exists, so it uses only raw syscalls
 // (rawsyscall6) and mmap'd scratch memory -- never the Go heap, never libc,
@@ -82,12 +84,17 @@ const (
 	ptrArrCap  = 4 << 10 // max pointers per argv/envp array (incl. nil terminator)
 	ptrArrSize = ptrArrCap * ptrSize
 
-	guardVar = "GOFFI_UNIVERSAL_REEXEC=1"
+	// The guard: "GOFFI_UNIVERSAL_REEXEC=<pid>:1", written for the process
+	// the bridge is about to re-exec. execve keeps the pid, so the re-executed
+	// process finds its own pid there and stops. A child it starts later
+	// inherits the variable but has a new pid, so it runs the bridge itself
+	// instead of assuming a libc its parent had (the exec.Command(os.Args[0])
+	// footgun). Tagged the same way as exeKey and argv0Key below.
 	guardKey = "GOFFI_UNIVERSAL_REEXEC="
 
-	// The probe: see probeHostLoader. probeVar is set only in the environment
-	// of the throwaway child, never in the process that goes on to run.
-	probeVar     = "GOFFI_UNIVERSAL_PROBE=1"
+	// The probe: see probeHostLoader. "GOFFI_UNIVERSAL_PROBE=<pid>:1", set
+	// only in the environment of the throwaway child, never in the process
+	// that goes on to run.
 	probeKey     = "GOFFI_UNIVERSAL_PROBE="
 	ldPreloadKey = "LD_PRELOAD="
 	preloadFile  = "/etc/ld.so.preload"
@@ -265,6 +272,92 @@ func matchAt(base unsafe.Pointer, off, length int, key string) bool {
 	return true
 }
 
+// taggedAt reports where the value of a "<key><pid>:<value>" entry starting at
+// off begins, or -1 if the entry is not key, or is tagged with another pid.
+//
+//go:nosplit
+func taggedAt(base unsafe.Pointer, off, length int, key string, pid uintptr) int {
+	if !matchAt(base, off, length, key) {
+		return -1
+	}
+	p := off + len(key)
+	var v uintptr
+	digits := 0
+	for p < length {
+		c := *(*byte)(unsafe.Add(base, p))
+		if c < '0' || c > '9' {
+			break
+		}
+		v = v*10 + uintptr(c-'0')
+		p++
+		digits++
+	}
+	if digits == 0 || v != pid || p >= length || *(*byte)(unsafe.Add(base, p)) != ':' {
+		return -1
+	}
+	return p + 1
+}
+
+// isBridgeVar reports whether the entry at off is one of the variables the
+// bridge writes. The bridge drops every inherited one from the environment it
+// hands on and writes its own, so they do not pile up across generations.
+//
+//go:nosplit
+func isBridgeVar(base unsafe.Pointer, off, length int) bool {
+	return matchAt(base, off, length, guardKey) || matchAt(base, off, length, probeKey) ||
+		matchAt(base, off, length, exeKey) || matchAt(base, off, length, argv0Key)
+}
+
+// hasPrefixC reports whether the NUL-terminated C string p starts with s.
+//
+//go:nosplit
+func hasPrefixC(p *byte, s string) bool {
+	if p == nil {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := *(*byte)(unsafe.Add(unsafe.Pointer(p), i))
+		if c != s[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameBase reports whether the last path element of the C string p equals the
+// last path element of s. Used to recognise the host loader in
+// /proc/self/exe, which is the loader's resolved path (on Debian
+// /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 for /lib64/ld-linux-x86-64.so.2).
+//
+//go:nosplit
+func sameBase(p *byte, s string) bool {
+	if p == nil {
+		return false
+	}
+	n, start := 0, 0
+	for *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
+		if *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) == '/' {
+			start = n + 1
+		}
+		n++
+	}
+	sb := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' {
+			sb = i + 1
+		}
+	}
+	if n-start != len(s)-sb {
+		return false
+	}
+	for i := 0; i < n-start; i++ {
+		if *(*byte)(unsafe.Add(unsafe.Pointer(p), start+i)) != s[sb+i] {
+			return false
+		}
+	}
+	return true
+}
+
 // diag writes a short message to stderr (best effort). write(2) takes a
 // pointer+length, so no NUL is needed and the message can live in rodata --
 // this works even before the cstr staging buffer is set up.
@@ -326,6 +419,14 @@ func patchInterpInBuf(buf unsafe.Pointer, n uintptr) bool {
 	phnum := uintptr(*(*uint16)(unsafe.Add(buf, 0x38)))
 	if phentsize < 56 || phoff+phnum*phentsize > n {
 		return false
+	}
+	// A copy whose PT_INTERP is already in place needs no patch: a child
+	// started from the memfd a parent was loaded from (os.Args[0] is
+	// /proc/self/fd/<n> on glibc) is exactly that image.
+	for i := uintptr(0); i < phnum; i++ {
+		if *(*uint32)(unsafe.Add(buf, phoff+i*phentsize)) == ptInterp {
+			return true
+		}
 	}
 	for i := uintptr(0); i < phnum; i++ {
 		pe := phoff + i*phentsize
@@ -453,9 +554,9 @@ func needsPreloadProbe(envBase unsafe.Pointer, envLen int) bool {
 //
 //go:nosplit
 func probeHostLoader(loaderC *byte, argvBase, envpBase unsafe.Pointer, ei int) bool {
-	probe := cstr(probeVar)
+	one := cstr("1")
 	status := mmapAnon(4096)
-	if probe == nil || status == nil || ei+1 >= ptrArrCap {
+	if one == nil || status == nil || ei+1 >= ptrArrCap {
 		return true
 	}
 	// clone with only SIGCHLD and no new stack is fork(2), and exists on both
@@ -466,7 +567,12 @@ func probeHostLoader(loaderC *byte, argvBase, envpBase unsafe.Pointer, ei int) b
 	}
 	if pid == 0 {
 		// In the child. It has its own copy of everything, so the probe
-		// variable never reaches the parent's environment.
+		// variable never reaches the parent's environment. It is tagged with
+		// the child's own pid, which the execve below keeps.
+		probe := taggedEnv(probeKey, rawsyscall6(sysGetpid, 0, 0, 0, 0, 0, 0), one)
+		if probe == nil {
+			rawsyscall6(sysExitGroup, 0, 0, 0, 0, 0, 0)
+		}
 		setPtr(envpBase, ei, uintptr(unsafe.Pointer(probe)))
 		setPtr(envpBase, ei+1, 0)
 		rawsyscall6(sysExecve, uintptr(unsafe.Pointer(loaderC)), uintptr(argvBase), uintptr(envpBase), 0, 0, 0)
@@ -533,23 +639,35 @@ func reexecUniversal() bool {
 	// was asked to prove: it has reached this point, so the loader mapped the
 	// libc and every library preloaded next to it initialised. It stops here,
 	// before the Go runtime does anything else.
+	//
+	// Both variables count only when tagged with this process's pid. An
+	// inherited guard describes the parent: this process was started some
+	// other way (exec.Command(os.Args[0]) and the like) and still needs the
+	// bridge. parentExe is the parent's recorded executable, used below when
+	// this process was started from the parent's memfd.
+	pid := rawsyscall6(sysGetpid, 0, 0, 0, 0, 0, 0)
+	ppid := rawsyscall6(sysGetppid, 0, 0, 0, 0, 0, 0)
 	guarded, probing := false, false
+	parentExe := -1
 	for off := 0; off < envLen; {
-		if matchAt(envBase, off, envLen, guardKey) {
+		if taggedAt(envBase, off, envLen, guardKey, pid) >= 0 {
 			guarded = true
 		}
-		if matchAt(envBase, off, envLen, probeKey) {
+		if taggedAt(envBase, off, envLen, probeKey, pid) >= 0 {
 			probing = true
+		}
+		if v := taggedAt(envBase, off, envLen, exeKey, ppid); v >= 0 {
+			parentExe = v
 		}
 		for off < envLen && *(*byte)(unsafe.Add(envBase, off)) != 0 {
 			off++
 		}
 		off++ // skip NUL
 	}
+	if probing {
+		rawsyscall6(sysExitGroup, 0, 0, 0, 0, 0, 0)
+	}
 	if guarded {
-		if probing {
-			rawsyscall6(sysExitGroup, 0, 0, 0, 0, 0, 0)
-		}
 		return true
 	}
 
@@ -588,6 +706,25 @@ func reexecUniversal() bool {
 	}
 	if exeC == nil {
 		exeC = cstr("/proc/self/exe")
+	}
+
+	// Started by the host loader as a program ("<loader> --preload <libs>
+	// <image>", the documented way to start another copy by hand): the
+	// loader has already bound the libc it was asked to preload. Re-execing
+	// would hand the loader the loader itself.
+	if sameBase(realExeC, glibcLoader) || sameBase(realExeC, muslLoader) {
+		return true
+	}
+
+	// Started from the memfd image of a parent (on glibc its os.Args[0] is
+	// /proc/self/fd/<n>): /proc/self/exe names a memfd, not a file. The
+	// parent recorded where the binary really lives; pass that on.
+	if hasPrefixC(realExeC, "/memfd:") {
+		if parentExe >= 0 {
+			realExeC = (*byte)(unsafe.Add(envBase, parentExe))
+		} else {
+			realExeC = nil
+		}
 	}
 
 	// glibc only binds a re-exec'd main object that carries a PT_INTERP. Our
@@ -657,14 +794,16 @@ func reexecUniversal() bool {
 	// -4: room for the guard, the two recorded variables below, and the NULL.
 	ei := 0
 	for off := 0; off < envLen && ei < ptrArrCap-4; {
-		setPtr(envpBase, ei, uintptr(unsafe.Add(envBase, off)))
-		ei++
+		if !isBridgeVar(envBase, off, envLen) {
+			setPtr(envpBase, ei, uintptr(unsafe.Add(envBase, off)))
+			ei++
+		}
 		for off < envLen && *(*byte)(unsafe.Add(envBase, off)) != 0 {
 			off++
 		}
 		off++ // skip NUL
 	}
-	if g := cstr(guardVar); g != nil {
+	if g := taggedEnv(guardKey, pid, cstr("1")); g != nil {
 		setPtr(envpBase, ei, uintptr(unsafe.Pointer(g)))
 		ei++
 	}
@@ -680,7 +819,6 @@ func reexecUniversal() bool {
 	// empty /proc/self/cmdline, a readlink that failed -- and a missing
 	// variable is a better answer than a guessed one, so each is recorded
 	// only when it is real.
-	pid := rawsyscall6(sysGetpid, 0, 0, 0, 0, 0, 0)
 	if realExeC != nil && ei < ptrArrCap-2 {
 		if v := taggedEnv(exeKey, pid, realExeC); v != nil {
 			setPtr(envpBase, ei, uintptr(unsafe.Pointer(v)))

@@ -5,6 +5,7 @@ package ffi
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -39,7 +40,32 @@ func Executable() (string, error) {
 	if p, ok := recordedSelf(envUniversalExe); ok {
 		return p, nil
 	}
-	return os.Executable()
+	exe, err := os.Executable()
+	if err != nil {
+		return exe, err
+	}
+	// A copy of a universal program started by hand through the host loader
+	// ("<loader> --preload <libs> <image>") never passes through the bridge,
+	// so nothing was recorded for it, and os.Executable names the loader. The
+	// same holds for a copy the bridge could not describe because it was
+	// started from its parent's memfd. Either way the parent's record is the
+	// answer: both run the parent's image.
+	if isLoaderOrMemfd(exe) {
+		if p, ok := recordedFor(envUniversalExe, os.Getppid()); ok {
+			return p, nil
+		}
+	}
+	return exe, nil
+}
+
+// isLoaderOrMemfd reports whether exe, an os.Executable result, is the host
+// dynamic loader or a memfd rather than a program file.
+func isLoaderOrMemfd(exe string) bool {
+	if strings.HasPrefix(exe, "/memfd:") {
+		return true
+	}
+	l := HostLoader()
+	return l != "" && filepath.Base(exe) == filepath.Base(l)
 }
 
 // Argv0 returns the name this process was invoked with -- what os.Args[0] would
@@ -64,6 +90,12 @@ func Argv0() string {
 // describes this process. A non-empty value for another pid is a variable
 // inherited from a parent, which says nothing about us.
 func recordedSelf(key string) (string, bool) {
+	return recordedFor(key, os.Getpid())
+}
+
+// recordedFor reads a "<pid>:<value>" variable and reports its value if it is
+// tagged with pid.
+func recordedFor(key string, want int) (string, bool) {
 	raw := os.Getenv(key)
 	if raw == "" {
 		return "", false
@@ -73,7 +105,7 @@ func recordedSelf(key string) (string, bool) {
 		return "", false
 	}
 	pid, err := strconv.Atoi(tag)
-	if err != nil || pid != os.Getpid() {
+	if err != nil || pid != want {
 		return "", false
 	}
 	return value, true

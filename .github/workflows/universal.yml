@@ -40,11 +40,20 @@ jobs:
           set -euo pipefail
           bash scripts/build-universal.sh -o universal-probe ./cmd/universal-probe
           go run ./cmd/goffi-audit universal-probe
+          bash scripts/build-universal.sh -o universal-respawn ./cmd/universal-respawn
+          go run ./cmd/goffi-audit universal-respawn
+      - name: A universal binary starts copies of itself (runner host)
+        run: |
+          set -euo pipefail
+          ./universal-respawn | tee out.txt
+          grep -q RESPAWN-PROBE-OK out.txt
       - name: Upload universal probe
         uses: actions/upload-artifact@v4
         with:
           name: universal-probe
-          path: universal-probe
+          path: |
+            universal-probe
+            universal-respawn
 
   run-glibc:
     name: run on glibc (${{ matrix.image }})
@@ -69,6 +78,12 @@ jobs:
           chmod +x universal-probe
           ./universal-probe | tee out.txt
           grep -q UNIVERSAL-PROBE-OK out.txt
+      - name: The same binary starts copies of itself
+        run: |
+          set -eu
+          chmod +x universal-respawn
+          ./universal-respawn | tee out.txt
+          grep -q RESPAWN-PROBE-OK out.txt
 
   preload-failure:
     name: a preloaded library that aborts (f4 #1213)
@@ -159,6 +174,13 @@ jobs:
           chmod +x universal-probe
           ./universal-probe | tee out.txt
           grep -q UNIVERSAL-PROBE-OK out.txt
+      - name: The same binary starts copies of itself
+        shell: sh
+        run: |
+          set -eu
+          chmod +x universal-respawn
+          ./universal-respawn | tee out.txt
+          grep -q RESPAWN-PROBE-OK out.txt
 
   purego-coexistence:
     name: purego coexistence (CGO-free, -tags nofakecgo)

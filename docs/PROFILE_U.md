@@ -97,7 +97,7 @@ one that could still have chosen to go on without FFI.
 
 So when either is non-empty, the bridge first starts the same launch -- same
 loader, libc, image and environment -- in a forked child, with
-`GOFFI_UNIVERSAL_PROBE=1` added. That child stops as soon as it reaches the
+`GOFFI_UNIVERSAL_PROBE=<pid>:1` added. That child stops as soon as it reaches the
 bridge, so nothing of the program runs. If it exits 0 the real re-exec goes
 ahead; if it was killed or failed, the bridge says so once on stderr and
 continues without FFI, exactly as on a host with no known loader
@@ -110,27 +110,30 @@ never sees it.
 
 ## Starting another copy of yourself
 
-`GOFFI_UNIVERSAL_REEXEC` is inherited, and the bridge honours it: a child that
-inherits it concludes it already came through the loader and binds no libc.
-Under `exec.Command(os.Args[0], ...)` — or any other plain respawn — the child
-therefore dies before `main`, as `symbol lookup error: undefined symbol: malloc`
-on glibc, or as a jump to an unbound symbol on musl.
+Just start it. `exec.Command(os.Args[0], ...)`, `exec.Command(exe, ...)` with
+`exe` from `ffi.Executable()`, and the host loader by hand
+(`exec.Command(ffi.HostLoader(), "--preload", ffi.HostPreload(), os.Args[0], ...)`)
+all give the child a working libc.
 
-Start the copy the way the bridge would have:
+The guard the bridge leaves in the environment is `GOFFI_UNIVERSAL_REEXEC=<pid>:1`,
+tagged like `GOFFI_UNIVERSAL_EXE` and `GOFFI_UNIVERSAL_ARGV0`. The re-executed
+process keeps its pid across `execve` and finds its own tag. A child inherits
+the variable but has a new pid, so it runs the bridge itself. The bridge also
+drops the inherited copies of all four variables before writing its own, so
+they do not pile up across generations.
 
-```go
-exec.Command(ffi.HostLoader(), append(
-    []string{"--preload", ffi.HostPreload(), os.Args[0]}, args...)...)
-```
+Two ways of being started need no re-exec, and the bridge recognises both:
 
-`ffi.HostPreload()`, not `ffi.HostLibC()`: on glibc older than 2.34 libc alone
-leaves `pthread_create` and `dlopen` unbound, and the child dies before `main`
-with `symbol lookup error: undefined symbol: pthread_attr_getstacksize`.
+- by the host loader as a program (`/proc/self/exe` is the loader): the loader
+  has already preloaded the libc it was given;
+- from the parent's memfd (on glibc a re-executed process has `os.Args[0]` =
+  `/proc/self/fd/<n>`, and a child started with it runs that image). This one
+  does go through the bridge again, and records the parent's `ffi.Executable()`
+  as its own, since `/proc/self/exe` names no file.
 
-`os.Args[0]`, not `ffi.Executable()`: the loader has to be handed the image this
-process was loaded from, which on glibc is the memfd and not the file on disk.
-The loader shifts `argv` as usual, so the child sees the image as its `argv[0]`
-and its own arguments from `argv[1]`.
+`ffi.Executable()` therefore names the file on disk in every child.
+`cmd/universal-respawn` starts itself all four ways (plus a grandchild) and
+checks that each child makes FFI calls. CI runs it on glibc and musl.
 
 ## Attribution
 

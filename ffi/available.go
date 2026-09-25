@@ -9,18 +9,24 @@ import (
 )
 
 // Available reports whether this build of goffi can load shared libraries and
-// call foreign functions.
+// call foreign functions. The answer depends on the build mode:
 //
-// It returns false in two cases. The binary was built with -tags goffi_static,
-// a mode that strips every //go:cgo_import_dynamic directive so the Go linker
-// produces a fully static executable (no PT_INTERP, no DT_NEEDED); there
-// LoadLibrary, GetSymbol and CallFunction return an error wrapping
-// ErrStaticBuild instead of calling into libc. Or the binary is a universal
-// ("Profile U") build running on a host whose dynamic loader goffi does not
-// recognise, so it never bound a libc at startup; there the same three report
-// ErrNoHostLibc. The second case is a property of the machine rather than of
-// the build, so it can only be answered at run time -- which is the reason to
-// ask this function rather than to reason about build tags.
+//   - -tags goffi_static: always false, a compile-time constant. The build has
+//     no //go:cgo_import_dynamic directives, so the linker emits a fully static
+//     executable (no PT_INTERP, no DT_NEEDED) and there is no loader to ask.
+//     LoadLibrary, GetSymbol and CallFunction return an error wrapping
+//     ErrStaticBuild, and NewCallback panics. The tag is ignored on Windows
+//     and Android, which never load libraries through cgo_import_dynamic, so
+//     there Available stays true.
+//   - -tags goffi_universal ("Profile U"): decided at run time, once, before
+//     main. The binary re-execs itself through the host's dynamic loader with
+//     the host libc preloaded. On a host whose loader goffi does not recognise,
+//     or where that re-exec cannot be made to work, the process carries on as a
+//     pure-Go program and Available is false; the FFI entry points then return
+//     ErrNoHostLibc. The same binary can answer differently on two machines.
+//   - Every other build (the default, goffi_musl, CGO_ENABLED=1): always true.
+//     The libc is a DT_NEEDED dependency, so a process that reached main has
+//     it; nothing is probed at run time.
 //
 // Callers that have a pure-Go fallback should branch on this at startup rather
 // than treating the first LoadLibrary failure as fatal:
@@ -31,9 +37,8 @@ import (
 //	    backend = newPureGoBackend()
 //	}
 //
-// The goffi_static tag is ignored on Windows and Android, where library loading
-// never went through cgo_import_dynamic, so Available reports true there even
-// when the tag is set.
+// Under goffi_static the call is a constant false, so the compiler drops the
+// accelerated branch and everything only it reaches.
 func Available() bool {
 	return !static.Enabled && !hostlibc.Missing
 }
