@@ -110,10 +110,15 @@ never sees it.
 
 ## Starting another copy of yourself
 
-Just start it. `exec.Command(os.Args[0], ...)`, `exec.Command(exe, ...)` with
-`exe` from `ffi.Executable()`, and the host loader by hand
+Just start it: `exec.Command(os.Args[0], ...)` or `exec.Command(exe, ...)`
+with `exe` from `ffi.Executable()`. The child runs the bridge itself and gets a
+working libc.
+
+Starting the copy through the host loader by hand
 (`exec.Command(ffi.HostLoader(), "--preload", ffi.HostPreload(), os.Args[0], ...)`)
-all give the child a working libc.
+is no longer needed. It still works on musl and on glibc 2.34+, but glibc 2.31's
+loader rejects the `/proc/self/fd/<n>` image with `loader cannot load itself`
+(Debian 11, Ubuntu 20.04), before any goffi code runs.
 
 The guard the bridge leaves in the environment is `GOFFI_UNIVERSAL_REEXEC=<pid>:1`,
 tagged like `GOFFI_UNIVERSAL_EXE` and `GOFFI_UNIVERSAL_ARGV0`. The re-executed
@@ -132,8 +137,10 @@ Two ways of being started need no re-exec, and the bridge recognises both:
   as its own, since `/proc/self/exe` names no file.
 
 `ffi.Executable()` therefore names the file on disk in every child.
-`cmd/universal-respawn` starts itself all four ways (plus a grandchild) and
-checks that each child makes FFI calls. CI runs it on glibc and musl.
+`cmd/universal-respawn` starts itself through `os.Args[0]`, `ffi.Executable()`,
+the host loader and a grandchild, and checks that each child makes FFI calls
+(the host-loader launch is reported but not required). CI runs it on glibc and
+musl.
 
 ## Attribution
 
