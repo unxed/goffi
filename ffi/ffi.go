@@ -54,9 +54,8 @@
 //
 // # Performance
 //
-// This implementation uses hand-optimized assembly for each platform's calling
-// convention. Overhead is approximately 50-60ns per call, which is negligible
-// for most use cases (e.g., WebGPU rendering).
+// Hand-optimized assembly per platform ABI. Overhead: 88-114 ns/op with
+// errno capture. sync.Pool for callback stack-move safety (0 allocs steady state).
 //
 // # Safety
 //
@@ -275,7 +274,6 @@ func PrepareVariadicCallInterface(
 //   - All argument pointers must remain valid during the call
 //   - Return value buffer must be large enough for the result type
 //   - Use runtime.KeepAlive() if needed to prevent premature GC of arguments
-//   - Use runtime.Pinner to pin pointers under a moving GC
 func CallFunctionContext(
 	ctx context.Context,
 	cif *types.CallInterface,

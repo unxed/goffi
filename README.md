@@ -72,6 +72,29 @@ CGO_ENABLED=1 go build ./...
 
 > **How?** goffi uses Go's `cgo_import_dynamic` for dynamic library loading. Under `CGO_ENABLED=0` the cgo runtime is supplied by `internal/fakecgo`; under `CGO_ENABLED=1` the standard `runtime/cgo` is linked in. Both modes share the same FFI fast path and ABIs.
 
+### Linking modes (Linux)
+
+`CGO_ENABLED=0` does **not** imply a fully static ELF when goffi is imported. `//go:cgo_import_dynamic` for `dlopen` / libc still records `PT_INTERP` and `DT_NEEDED` (`libdl.so.2`, `libc.so.6`, `libpthread.so.0`). This matches purego and is required for host `dlopen` — the kernel only maps `ld.so` when `PT_INTERP` is present. See [goffi#74](https://github.com/go-webgpu/goffi/issues/74) and [gogpu#474](https://github.com/gogpu/gogpu/issues/474).
+
+| Mode | How | ELF shape | `LoadLibrary` | Typical use |
+|------|-----|-----------|---------------|-------------|
+| **Dynamic FFI** (default) | `CGO_ENABLED=0 go build` | dynamic + `libdl`/`libc` | yes | desktop GPU/GUI |
+| **Musl dynamic** | `CGO_ENABLED=0 go build -tags goffi_musl -gcflags=github.com/go-webgpu/goffi/internal/dl=-std` | dynamic vs musl | yes | Alpine containers ([docs/MUSL.md](docs/MUSL.md)) |
+| **Universal** | `scripts/build-universal.sh` (`-tags goffi_universal`) | no `PT_INTERP`; re-execs through the host loader | yes, on glibc and musl hosts (`ffi.Available()`) | one binary for all Linux distros ([docs/PROFILE_U.md](docs/PROFILE_U.md)) |
+| **Static no-FFI** | `CGO_ENABLED=0 go build -tags goffi_static` | fully static (no `PT_INTERP`, no `NEEDED`) | no (`errors.Is(err, ffi.ErrStaticBuild)`) | `FROM scratch`, air-gapped CLI |
+
+```bash
+# Fully static Linux amd64/arm64 binary (FFI unavailable)
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags goffi_static -o app .
+file app   # statically linked
+# Verify: no INTERP / NEEDED
+scripts/check-elf-linking.sh --static ./app
+```
+
+Under `-tags goffi_static`, errno capture is unavailable (always returns 0): `ErrnoFnAddr()` is a no-op so the assembly trampoline skips `__errno_location` / `__error`, which need dynamic libc.
+
+`FROM scratch` + Vulkan/Wayland/libX11 via host `dlopen` is not possible without either `ld.so` or a userspace ELF loader (see [docs/ADR-001-userspace-elf-loader.md](docs/ADR-001-userspace-elf-loader.md)). Windows is unaffected (`LoadLibraryW` via ntdll).
+
 ### Example: Calling strlen
 
 ```go
@@ -380,6 +403,9 @@ if err != nil {
 
 ## Known Limitations
 
+**Linux: default builds are dynamically linked** ([#74](https://github.com/go-webgpu/goffi/issues/74))
+- Importing goffi records `libdl`/`libc` via `cgo_import_dynamic` even with `CGO_ENABLED=0`. Use `-tags goffi_static` for a fully static ELF (no runtime `.so` loading), `-tags goffi_musl` for Alpine, or the universal build for one binary on both libcs. See [Linking modes](#linking-modes-linux).
+
 **Windows: C++ exceptions may crash the program** ([#12516](https://github.com/golang/go/issues/12516))
 - Go runtime limitation, not goffi-specific. Go 1.22+ added partial SEH support ([#58542](https://github.com/golang/go/issues/58542)), but edge cases remain.
 - Workaround: build native libraries with `panic=abort`.
@@ -492,7 +518,12 @@ zero-CGO library.
 | v0.4.1 | Released | ABI compliance audit — 10/11 gaps fixed |
 | v0.4.2 | Released | purego compatibility (`-tags nofakecgo`) |
 | v0.5.1 | Released | Struct ABI, CGO_ENABLED=1, 9-16B XMM return |
-| **v0.6.0** | **In progress** | Variadic functions (`PrepareVariadicCallInterface`), builder API |
+| v0.6.0 | Released | errno always-capture (`CallFunction` → `(Errno, error)`) |
+| v0.6.1 | Released | Android ARM64 preview, fakecgo rename |
+| v0.6.2 | Released | Windows scalar float returns |
+| v0.6.3 | Released | ARM64 HFA checkptr + 9-16B struct return fix |
+| **v0.6.4** | **Released** | `-tags goffi_static`, linking docs, struct examples |
+| v0.7.0 | Planned | RegisterFunc / Builder API, C-ABI host profile (#81) |
 | v1.0.0 | Planned | API stability (SemVer 2.0), security audit |
 
 See [CHANGELOG.md](CHANGELOG.md) for version history and [ROADMAP.md](ROADMAP.md) for the full plan.
@@ -514,13 +545,15 @@ go test -v ./ffi                       # verbose, auto-detects platform
 
 | Document | Description |
 |----------|-------------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical architecture: assembly, ABIs, callbacks |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical architecture: assembly, ABIs, callbacks, linking |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Benchmarks, optimization strategies, Go 1.26 |
+| [docs/ANDROID.md](docs/ANDROID.md) | Android ARM64 preview ABI + build notes |
+| [docs/ADR-001-userspace-elf-loader.md](docs/ADR-001-userspace-elf-loader.md) | Research: optional pure-Go `.so` loader |
 | [CHANGELOG.md](CHANGELOG.md) | Version history, migration guides |
 | [ROADMAP.md](ROADMAP.md) | Development roadmap to v1.0 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [SECURITY.md](SECURITY.md) | Security policy |
-| [examples/](examples/) | Working code examples |
+| [examples/](examples/) | Working code examples (`simple`, `struct`) |
 
 ---
 
