@@ -5,6 +5,7 @@ package ffi
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,5 +45,27 @@ func TestHostInfo(t *testing.T) {
 	}
 	if libc == "" {
 		t.Errorf("HostLibC() is empty for kind %q", kind)
+	}
+}
+
+// TestHostPreload pins the relation between the preload list and the libc:
+// empty together, and the libc named first when there is one.
+func TestHostPreload(t *testing.T) {
+	libc, preload := HostLibC(), HostPreload()
+	if libc == "" {
+		if preload != "" {
+			t.Errorf("HostLibC() is empty but HostPreload() = %q", preload)
+		}
+		return
+	}
+	if !strings.HasPrefix(preload+" ", libc+" ") {
+		t.Errorf("HostPreload() = %q, want it to start with HostLibC() %q", preload, libc)
+	}
+	if LibcKind() == "glibc" {
+		for _, lib := range []string{"libpthread.so.0", "libdl.so.2"} {
+			if !strings.Contains(" "+preload+" ", " "+lib+" ") {
+				t.Errorf("HostPreload() = %q on glibc, want it to name %s", preload, lib)
+			}
+		}
 	}
 }

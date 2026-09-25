@@ -23,7 +23,9 @@ and then strips the program interpreter. The universal build needs **no**
    loads the binary directly on any distribution (as it does a static binary).
 3. **Re-exec through the host loader.** At the very top of startup — before any
    libc symbol is touched — the process re-execs itself through the host's own
-   dynamic loader with the host libc pre-loaded. musl's loader binds the
+   dynamic loader with the host libc pre-loaded (on glibc together with
+   `libpthread.so.0` and `libdl.so.2`: before glibc 2.34 the `pthread_*` and
+   `dl*` functions live there, not in `libc.so.6`). musl's loader binds the
    empty-SONAME symbols of a no-interp binary directly; glibc's loader only
    binds a main object that carries a `PT_INTERP`, so on glibc the binary hands
    the loader an in-memory copy of itself with the interpreter header restored.
@@ -35,12 +37,19 @@ The host loader and libc are discovered from an auditable table
 ```go
 ffi.HostLoader() // e.g. "/lib64/ld-linux-x86-64.so.2" or "/lib/ld-musl-x86_64.so.1"
 ffi.HostLibC()   // e.g. "libc.so.6" or "libc.musl-x86_64.so.1"
+ffi.HostPreload() // e.g. "libc.so.6 libpthread.so.0 libdl.so.2" or "libc.musl-x86_64.so.1"
 ffi.LibcKind()   // "glibc" | "musl" | "unknown"
 ```
 
 ## Limitations
 
 - **Linux only.** amd64 is run-tested; arm64 is cross-compile-verified.
+- **glibc 2.30 or newer.** The loader's `--preload` option first appeared in
+  glibc 2.30. An older loader takes `--preload` for the name of the program to
+  run and the re-executed process dies before `main` with
+  `--preload: cannot open shared object file` (observed on Ubuntu 18.04,
+  glibc 2.27). The oldest glibc CI runs the universal binary on is 2.31
+  (Debian 11, Ubuntu 20.04).
 - A host whose dynamic loader goffi does not recognise cannot do FFI: there is
   nothing to re-exec through, so the process never binds a libc. It still
   runs. The bridge says so once on stderr, clears `runtime.iscgo` so the Go
@@ -76,7 +85,7 @@ ffi.LibcKind()   // "glibc" | "musl" | "unknown"
   implements that API entirely on top of goffi and carries **no fakecgo of its
   own**, so it needs no build tags and works unchanged in universal mode. No
   pureffi change is required for Profile U — this branch only *adds* public API
-  (`HostLoader`/`HostLibC`/`LibcKind`) and build-tag-gated files.
+  (`HostLoader`/`HostLibC`/`HostPreload`/`LibcKind`) and build-tag-gated files.
 
 ## Hosts that preload a library
 
@@ -111,8 +120,12 @@ Start the copy the way the bridge would have:
 
 ```go
 exec.Command(ffi.HostLoader(), append(
-    []string{"--preload", ffi.HostLibC(), os.Args[0]}, args...)...)
+    []string{"--preload", ffi.HostPreload(), os.Args[0]}, args...)...)
 ```
+
+`ffi.HostPreload()`, not `ffi.HostLibC()`: on glibc older than 2.34 libc alone
+leaves `pthread_create` and `dlopen` unbound, and the child dies before `main`
+with `symbol lookup error: undefined symbol: pthread_attr_getstacksize`.
 
 `os.Args[0]`, not `ffi.Executable()`: the loader has to be handed the image this
 process was loaded from, which on glibc is the memfd and not the file on disk.

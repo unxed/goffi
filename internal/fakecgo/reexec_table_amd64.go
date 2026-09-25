@@ -24,13 +24,16 @@ const (
 	sysExitGroup   = 231
 )
 
-// Host dynamic loader + libc SONAME, per libc flavor, for amd64. These are the
-// only two ABIs goffi's universal build targets. The SONAMEs are passed bare
-// to `<loader> --preload <soname>`; each loader resolves its own libc through
-// its default search path (verified on glibc and musl).
+// Host dynamic loader, libc SONAME and preload list, per libc flavor, for
+// amd64. These are the only two ABIs goffi's universal build targets. The
+// preload list is passed bare to `<loader> --preload <list>`; each loader
+// resolves the names through its default search path (verified on glibc and
+// musl). See glibcPreloadExtra for why glibc needs more than its libc.
 const (
-	glibcLoader = "/lib64/ld-linux-x86-64.so.2"
-	glibcLibc   = "libc.so.6"
-	muslLoader  = "/lib/ld-musl-x86_64.so.1"
-	muslLibc    = "libc.musl-x86_64.so.1"
+	glibcLoader  = "/lib64/ld-linux-x86-64.so.2"
+	glibcLibc    = "libc.so.6"
+	glibcPreload = glibcLibc + " " + glibcPreloadExtra
+	muslLoader   = "/lib/ld-musl-x86_64.so.1"
+	muslLibc     = "libc.musl-x86_64.so.1"
+	muslPreload  = muslLibc
 )

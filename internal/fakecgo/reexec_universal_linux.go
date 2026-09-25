@@ -16,12 +16,13 @@
 // So, at the very top of x_cgo_init, we re-exec the process through the host's
 // own dynamic loader with the host libc pre-loaded:
 //
-//	execve(<host-loader>, {<host-loader>, "--preload", <host-libc-soname>,
+//	execve(<host-loader>, {<host-loader>, "--preload", <host-libc-libraries>,
 //	                       <self>, <original args...>}, <env>+guard)
 //
 // The host loader maps its libc, the global symbol scope now contains malloc,
 // dlopen, pthread_*, __errno_location, and the re-executed process binds them
-// from whichever libc the host actually ships (glibc's libc.so.6 or musl's
+// from whichever libc the host actually ships (glibc's libc.so.6 -- with
+// libpthread.so.0 and libdl.so.2, see glibcPreloadExtra -- or musl's
 // libc.musl-<arch>.so.1). A guard variable in the environment stops the second
 // launch from re-execing again.
 //
@@ -101,6 +102,19 @@ const (
 	// ffi.Executable and ffi.Argv0 read these; see ffi/selfinfo.go.
 	exeKey   = "GOFFI_UNIVERSAL_EXE="
 	argv0Key = "GOFFI_UNIVERSAL_ARGV0="
+
+	// glibcPreloadExtra is what glibc needs preloaded beside libc.so.6.
+	// Before 2.34 glibc split the API the fakecgo runtime imports across three
+	// objects: pthread_create, pthread_detach, pthread_sigmask,
+	// pthread_attr_getstacksize and pthread_setspecific are in libpthread.so.0,
+	// dlopen, dlsym and dlerror in libdl.so.2, and none of them in libc.so.6.
+	// With libc alone the re-executed process dies before main with
+	// "symbol lookup error: undefined symbol: pthread_attr_getstacksize"
+	// (f4 #1381, Ubuntu 20.04, glibc 2.31). From 2.34 on both are stub
+	// objects that every glibc still installs and the functions live in
+	// libc.so.6, so preloading them there changes nothing. The loader's
+	// --preload list (glibc 2.30+) is delimited by spaces or colons.
+	glibcPreloadExtra = "libpthread.so.0 libdl.so.2"
 
 	// interp restore (glibc path)
 	mfdExec   = 0x0010 // MFD_EXEC (kernel 6.3+); fall back to 0 on older kernels
@@ -539,19 +553,19 @@ func reexecUniversal() bool {
 		return true
 	}
 
-	// Pick the host loader + libc SONAME by probing known loader paths.
+	// Pick the host loader + libc preload list by probing known loader paths.
 	// Prefer glibc when both are present; fall back to musl.
-	var loaderC, sonameC *byte
+	var loaderC, libsC *byte
 	var isGlibc bool
 	if g := cstr(glibcLoader); fileExists(g) {
 		loaderC = g
-		sonameC = cstr(glibcLibc)
+		libsC = cstr(glibcPreload)
 		isGlibc = true
 	} else if m := cstr(muslLoader); fileExists(m) {
 		loaderC = m
-		sonameC = cstr(muslLibc)
+		libsC = cstr(muslPreload)
 	}
-	if loaderC == nil || sonameC == nil {
+	if loaderC == nil || libsC == nil {
 		diag("goffi: universal build: no known host dynamic loader found; continuing without FFI\n")
 		return false
 	}
@@ -600,7 +614,7 @@ func reexecUniversal() bool {
 		return false
 	}
 
-	// Build argv: {loader, "--preload", soname, self, <original argv[1:]...>, NULL}
+	// Build argv: {loader, "--preload", libs, self, <original argv[1:]...>, NULL}
 	argvBase := mmapAnon(ptrArrSize)
 	envpBase := mmapAnon(ptrArrSize)
 	if argvBase == nil || envpBase == nil {
@@ -615,7 +629,7 @@ func reexecUniversal() bool {
 	ai++
 	setPtr(argvBase, ai, uintptr(unsafe.Pointer(preloadC)))
 	ai++
-	setPtr(argvBase, ai, uintptr(unsafe.Pointer(sonameC)))
+	setPtr(argvBase, ai, uintptr(unsafe.Pointer(libsC)))
 	ai++
 	setPtr(argvBase, ai, uintptr(unsafe.Pointer(exeC)))
 	ai++

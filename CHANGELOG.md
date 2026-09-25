@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A universal binary starts on glibc older than 2.34** (f4 #1381). The bridge
+  re-execed through the host loader with `--preload libc.so.6` only, but before
+  2.34 glibc keeps `pthread_create`, `pthread_attr_getstacksize` and the rest of
+  the `pthread_*` the runtime imports in `libpthread.so.0`, and
+  `dlopen`/`dlsym`/`dlerror` in `libdl.so.2`. On Ubuntu 20.04 / Debian 11
+  (glibc 2.31) the re-executed process died before `main` with
+  `symbol lookup error: undefined symbol: pthread_attr_getstacksize`. On glibc
+  the bridge now preloads `libc.so.6 libpthread.so.0 libdl.so.2`; from 2.34 on
+  the latter two are stubs every glibc still installs. The new
+  `ffi.HostPreload()` returns that list, for programs that start another copy of
+  themselves through the host loader. The universal CI now also runs on
+  `debian:bullseye-slim` and `ubuntu:20.04`.
 - **A universal binary no longer dies before `main` when a preloaded library
   aborts in the re-executed process** (f4 #1213). A library named in
   `/etc/ld.so.preload` (ESET's `libesets_pac.so`) is initialised in every process

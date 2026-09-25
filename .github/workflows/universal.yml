@@ -52,7 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        image: [ "debian:stable-slim", "ubuntu:24.04" ]
+        # bullseye and 20.04 carry glibc 2.31, which still keeps the pthread_*
+        # and dl* functions in libpthread.so.0 and libdl.so.2 rather than in
+        # libc.so.6 (merged in 2.34): the images above cannot catch a bridge
+        # that preloads libc alone (f4 #1381).
+        image: [ "debian:stable-slim", "ubuntu:24.04", "debian:bullseye-slim", "ubuntu:20.04" ]
     container:
       image: ${{ matrix.image }}
     steps:

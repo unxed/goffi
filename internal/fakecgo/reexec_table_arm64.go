@@ -24,10 +24,13 @@ const (
 	sysExitGroup   = 94
 )
 
-// Host dynamic loader + libc SONAME, per libc flavor, for arm64.
+// Host dynamic loader, libc SONAME and preload list, per libc flavor, for
+// arm64. See the amd64 table and glibcPreloadExtra.
 const (
-	glibcLoader = "/lib/ld-linux-aarch64.so.1"
-	glibcLibc   = "libc.so.6"
-	muslLoader  = "/lib/ld-musl-aarch64.so.1"
-	muslLibc    = "libc.musl-aarch64.so.1"
+	glibcLoader  = "/lib/ld-linux-aarch64.so.1"
+	glibcLibc    = "libc.so.6"
+	glibcPreload = glibcLibc + " " + glibcPreloadExtra
+	muslLoader   = "/lib/ld-musl-aarch64.so.1"
+	muslLibc     = "libc.musl-aarch64.so.1"
+	muslPreload  = muslLibc
 )

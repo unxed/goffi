@@ -38,8 +38,13 @@ func (k Kind) String() string {
 // Entry describes one libc: its dynamic loader path and its libc SONAME.
 type Entry struct {
 	Loader string // absolute path to the dynamic loader (ld.so)
-	LibC   string // libc SONAME, passed bare to `<loader> --preload <soname>`
-	Kind   Kind
+	LibC   string // libc SONAME
+	// Preload is passed bare to `<loader> --preload <list>` to give a
+	// universal binary every symbol it imports: LibC on musl; on glibc LibC
+	// followed by libpthread.so.0 and libdl.so.2, which hold the pthread_*
+	// and dl* functions on glibc older than 2.34 and are stubs from 2.34 on.
+	Preload string
+	Kind    Kind
 }
 
 // Detect reports the libc flavor of the running host by probing the known
